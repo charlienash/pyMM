@@ -123,7 +123,6 @@ class GMM():
         Sigma_list = params['Sigma_list']
         mu_list = params['mu_list']
         components = params['components']
-
         n_examples, data_dim = X.shape
         
         # Compute responsibilities
@@ -162,15 +161,14 @@ class GMM():
 
         """
         resp = ss['responsibilities']
-#        resp_sum = 
         
         # Update components param
         components = np.mean(resp, axis=0)
 
         # Update mean / Sigma params
+        mu_list = []
+        Sigma_list = []        
         for r in resp.T:        
-            mu_list = []
-            Sigma_list = []
             mu = np.sum(X*r[:,np.newaxis], axis=0) / r.sum()
             mu_list.append(mu)          
             Sigma = (X*r[:,np.newaxis]).T.dot(X) / r.sum() - np.outer(mu, mu)
@@ -261,13 +259,15 @@ class GMM():
             print("Model is not yet fitted. First use fit to learn the model"
                    + " params.")
         else:
-            components_cumsum = np.cumsum(self.components)
+            components = self.params['components']
+            mu_list = self.params['mu_list']
+            Sigma_list = self.params['Sigma_list']
+            components_cumsum = np.cumsum(components)
             samples = np.zeros([n_samples, self.data_dim])
             for n in range(n_samples):
                 r = np.random.rand(1)
                 z = np.argmin(r > components_cumsum)               
-                samples[n] = rd.multivariate_normal(self.mu_list[z], 
-                    self.Sigma_list[z])                
+                samples[n] = rd.multivariate_normal(mu_list[z], Sigma_list[z])                
             return samples
 
 

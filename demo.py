@@ -14,10 +14,10 @@ import numpy as np
 #%%
 n_examples = 1000
 data_dim = 2
-n_components = 2
+n_components = 3
 X = _generate_mixture_data(data_dim, n_components, n_examples)    
 #gmm = GMM(n_components=n_components)
-sgmm = SphericalGMM(n_components=n_components)
+sgmm = SphericalGMM(n_components=n_components, verbose=False)
 
 # Initialize GMM with k_means
 kmeans = KMeans(n_components)
@@ -34,7 +34,7 @@ params_init = {
                 'sigma_sq_list' : sigma_sq_list,
                 'components' : components
                 }
-                
+
 # Fit GMM
 #gmm.fit(X, params_init)
 sgmm.fit(X, params_init)
@@ -43,6 +43,7 @@ X_samples = sgmm.sample(1000)
 # Plot results
 plt.clf()
 plt.scatter(X[:,0], X[:,1], color='b')
-plt.hold(True)
+#plt.hold(True)
 plt.scatter(X_samples[:,0], X_samples[:,1], color='r')
+plt.axis('equal')
 plt.show()
