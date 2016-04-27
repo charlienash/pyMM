@@ -168,14 +168,14 @@ class GMM():
         components = np.mean(resp, axis=0)
 
         # Update mean / Sigma params
-        mu_list = []
-        Sigma_list = []
-        for r in resp.T:
+        for r in resp.T:        
+            mu_list = []
+            Sigma_list = []
             mu = np.sum(X*r[:,np.newaxis], axis=0) / r.sum()
             mu_list.append(mu)          
             Sigma = (X*r[:,np.newaxis]).T.dot(X) / r.sum() - np.outer(mu, mu)
             Sigma_list.append(Sigma)
-            
+
         # Store params in dictionary
         params = {
             'Sigma_list' : Sigma_list,
@@ -233,9 +233,7 @@ class GMM():
                       " You might want to increase the number of iterations.")
 
         # Update Object attributes
-        self.components = params['components']
-        self.Sigma_list = params['Sigma_list']
-        self.mu_list= params['mu_list']
+        self.params = params
         self.trainNll = ll
         self.isFitted = True
         self.data_dim = data_dim
@@ -305,6 +303,138 @@ class GMM():
             mean_ll = L / n_examples
             return mean_ll
             
+class SphericalGMM(GMM):
+    
+    def _e_step(self, X, params):
+        """ E-Step of the EM-algorithm.
+
+        The E-step takes the existing parameters, for the components, bias
+        and noise variance and computes sufficient statistics for the M-Step
+        by taking the expectation of latent variables conditional on the
+        visible variables. Also returns the likelihood for the data X and
+        projections into latent space of the data.
+
+        Args
+        ----
+        X : array, [nExamples, nFeatures]
+            Matrix of training data, where nExamples is the number of
+            examples and nFeatures is the number of features.
+        W : array, [dataDim, latentDim]
+            Component matrix data. Maps latent points to data space.
+        b : array, [dataDim,]
+            Data bias.
+        sigmaSq : float
+            Noise variance parameter.
+
+        Returns
+        -------
+        ss : dict
+
+        proj :
+
+        ll :
+        """
+        # Get params
+        sigma_sq_list = params['sigma_sq_list']
+        mu_list = params['mu_list']
+        components = params['components']
+
+        n_examples, data_dim = X.shape
+        
+        # Compute responsibilities
+        r = np.zeros([n_examples, self.n_components])
+        for k, mu, sigma_sq in zip(range(self.n_components), mu_list, sigma_sq_list):
+#            r[:,k] = multivariate_normal.pdf(X, mu, Sigma)
+            r[:,k] = _mv_gaussian_pdf(X, mu, sigma_sq * np.eye(data_dim))
+        r = r * components
+        r_sum = r.sum(axis=1)
+        responsibilities = r / r_sum[:,np.newaxis]
+            
+        # Store sufficient statistics in dictionary
+        ss = {
+            'responsibilities' : responsibilities
+             }
+             
+        # Compute log-likelihood
+        ll = np.log(r_sum).sum()
+
+        return ss, ll
+
+    def _m_step(self, X, ss, params):
+        """ M-Step of the EM-algorithm.
+
+        The M-step takes the sufficient statistics computed in the E-step, and
+        maximizes the expected complete data log-likelihood with respect to the
+        parameters.
+
+        Args
+        ----
+        ss : dict
+
+        Returns
+        -------
+        params : dict
+
+        """
+        resp = ss['responsibilities']
+#        resp_sum = 
+        
+        # Update components param
+        components = np.mean(resp, axis=0)
+        d = len(params['mu_list'][0])
+
+        # Update mean / Sigma params
+        mu_list = []
+        sigma_sq_list = []      
+        for r in resp.T:
+            mu = np.sum(X*r[:,np.newaxis], axis=0) / r.sum()
+            mu_list.append(mu)
+            dev = X - mu                
+            sigma_sq = np.trace(r[:,np.newaxis]*dev.dot(dev.T)) / (d*r.sum())
+            sigma_sq_list.append(sigma_sq)
+        # Store params in dictionary
+        params = {
+            'sigma_sq_list' : sigma_sq_list,
+            'mu_list' : mu_list,
+            'components' : components
+             }
+
+        return params
+        
+    def sample(self, n_samples=1):
+        """Sample from fitted model.
+
+        Sample from fitted model by first sampling from latent space
+        (spherical Gaussian) then transforming into data space using learned
+        parameters. Noise can then be added optionally.
+
+        Parameters
+        ----------
+        nSamples : int
+            Number of samples to generate
+        noisy : bool
+            Option to add noise to samples (default = True)
+
+        Returns
+        -------
+        dataSamples : array [nSamples, dataDim]
+            Collection of samples in data space.
+        """
+        if  not self.isFitted:
+            print("Model is not yet fitted. First use fit to learn the model"
+                   + " params.")
+        else:
+            components = self.params['components']
+            mu_list = self.params['mu_list']
+            sigma_sq_list = self.params['sigma_sq_list']
+            components_cumsum = np.cumsum(components)
+            samples = np.zeros([n_samples, self.data_dim])
+            for n in range(n_samples):
+                r = np.random.rand(1)
+                z = np.argmin(r > components_cumsum)               
+                samples[n] = rd.multivariate_normal(mu_list[z], 
+                    sigma_sq_list[z]*np.eye(self.data_dim))                
+            return samples
 
 
 
