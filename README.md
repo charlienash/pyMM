@@ -1,2 +1,2 @@
-# pyGen
+# pyMM
 mixture models in Python
