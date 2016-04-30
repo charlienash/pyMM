@@ -120,5 +120,5 @@ def plot_density(model, x_range='auto', y_range='auto', n_grid=100,
     plt.xticks([])
     plt.yticks([])
     plt.show()    
-    fig = plt.gcf()
-    fig.set_size_inches(4, 4, forward=True)
+#    fig = plt.gcf()
+#    fig.set_size_inches(8, 8, forward=True)

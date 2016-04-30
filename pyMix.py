@@ -22,7 +22,7 @@ from random import seed
 from util import _mv_gaussian_pdf, _get_rand_cov_mat
 #from scipy.stats import multivariate_normal
 from sklearn.cluster import KMeans
-from sklearn.decomposition import PCA
+from sklearn.decomposition import PCA, FactorAnalysis
 
 
 class GMM():
@@ -607,5 +607,171 @@ class MPPCA(GMM):
         Sigma_list = [W.dot(W.T) + sigma_sq*np.eye(self.data_dim) 
             for W,sigma_sq in zip(W_list, sigma_sq_list)]
         return Sigma_list
+        
+class MFA(GMM):
 
+    def __init__(self, n_components, latent_dim, tol=1e-3, max_iter=1000, 
+                  random_state=0, verbose=True):
+        
+        super(MFA,self).__init__(n_components, tol=1e-3, max_iter=1000, 
+            random_state=0, verbose=True)
+        self.latent_dim = latent_dim
+    
+    def _init_params(self, init_method, X=None):
+        seed(self.random_state)
+        n_examples = X.shape[0]
+        if init_method == 'kmeans':
+            kmeans = KMeans(self.n_components)
+            kmeans.fit(X)
+            mu_list = [k for k in kmeans.cluster_centers_]
+            W_list = []
+            Psi_list = []
+            for k in range(self.n_components):
+                data_k = X[kmeans.labels_==k,:]
+                fa = FactorAnalysis(n_components=self.latent_dim)
+                fa.fit(data_k)
+                W_list.append(fa.components_.T)                
+                Psi_list.append(np.diag(fa.noise_variance_))                
+            components = np.array([np.sum(kmeans.labels_==k) / n_examples for k in range(self.n_components)])
+            params_init = {
+                            'mu_list' : mu_list,
+                            'W_list' : W_list,
+                            'Psi_list' : Psi_list,
+                            'components' : components
+                            }
+            return params_init
+            
+    def _e_step(self, X, params):
+        """ E-Step of the EM-algorithm.
+
+        The E-step takes the existing parameters, for the components, bias
+        and noise variance and computes sufficient statistics for the M-Step
+        by taking the expectation of latent variables conditional on the
+        visible variables. Also returns the likelihood for the data X and
+        projections into latent space of the data.
+
+        Args
+        ----
+        X : array, [nExamples, nFeatures]
+            Matrix of training data, where nExamples is the number of
+            examples and nFeatures is the number of features.
+        W : array, [dataDim, latentDim]
+            Component matrix data. Maps latent points to data space.
+        b : array, [dataDim,]
+            Data bias.
+        sigmaSq : float
+            Noise variance parameter.
+
+        Returns
+        -------
+        ss : dict
+
+        proj :
+
+        ll :
+        """
+        # Get params
+        mu_list = params['mu_list']
+        components = params['components']
+        W_list = params['W_list']
+        Psi_list = params['Psi_list']
+        n_examples, data_dim = X.shape
+        
+        # Compute responsibilities
+        r = np.zeros([n_examples, self.n_components])
+        
+        # Get Sigma from params
+        Sigma_list = self._params_to_Sigma(params)
+        
+        for k, mu, Sigma in zip(range(self.n_components), mu_list, Sigma_list):
+            r[:,k] = _mv_gaussian_pdf(X, mu, Sigma)
+        r = r * components
+        r_sum = r.sum(axis=1)
+        responsibilities = r / r_sum[:,np.newaxis]
+        
+        # Get sufficient statistics E[z] and E[zz^t] for each component
+        z_list = []
+        zz_list = []
+        for mu, W, Psi in zip(mu_list, W_list, Psi_list):
+            dev = X - mu
+            F_inv = np.linalg.inv(W.dot(W.T) + Psi)
+            z = dev.dot(F_inv.dot(W))
+            z_list.append(z)
+            zz = (np.eye(self.latent_dim) - W.T.dot(F_inv).dot(W) 
+                  + z[:,:,np.newaxis] * z[:,np.newaxis,:])          
+            zz_list.append(zz)
+            
+        # Store sufficient statistics in dictionary
+        ss = {
+            'responsibilities' : responsibilities,
+            'z_list' : z_list,
+            'zz_list' : zz_list
+             }
+             
+        # Compute log-likelihood
+        sample_ll = np.log(r_sum)
+
+        return ss, sample_ll
+    
+    def _m_step(self, X, ss, params):
+        """ M-Step of the EM-algorithm.
+
+        The M-step takes the sufficient statistics computed in the E-step, and
+        maximizes the expected complete data log-likelihood with respect to the
+        parameters.
+
+        Args
+        ----
+        ss : dict
+
+        Returns
+        -------
+        params : dict
+
+        """
+        resp = ss['responsibilities']
+        z_list = ss['z_list']
+        zz_list = ss['zz_list']
+        W_list_old = params['W_list']      
+        
+        # Update components param
+        components = np.mean(resp, axis=0)
+
+        # Update mean / Sigma params
+        mu_list = []
+        W_list = []      
+        Psi_list = []
+        for r, W, z, zz in zip(resp.T, W_list_old, z_list, zz_list):      
+            # mu 
+            resid = X - z.dot(W.T)
+            mu = np.sum(resid*r[:,np.newaxis], axis=0) / r.sum()
+            mu_list.append(mu)
+            
+            # W
+            W1 = ((X-mu)*r[:,np.newaxis]).T.dot(z) # Checked
+            W2 = np.linalg.inv(np.sum(zz*r[:,np.newaxis,np.newaxis], axis=0))
+            W = W1.dot(W2)
+            W_list.append(W)
+            
+            # Psi
+            s1 = ((X-mu)*r[:,np.newaxis]).T.dot(X-mu)
+            s2 = W.dot((z*r[:,np.newaxis]).T.dot(X-mu))
+            Psi = np.diag(np.diag(s1 - s2)) / r.sum() # Checked
+            Psi_list.append(Psi)                            
+                
+        # Store params in dictionary
+        params = {
+            'W_list' : W_list,
+            'Psi_list' : Psi_list,
+            'mu_list' : mu_list,
+            'components' : components
+             }
+
+        return params
+        
+    def _params_to_Sigma(self, params):
+        W_list = params['W_list']
+        Psi_list = params['Psi_list']
+        Sigma_list = [W.dot(W.T) + Psi for W, Psi in zip(W_list, Psi_list)]
+        return Sigma_list
 

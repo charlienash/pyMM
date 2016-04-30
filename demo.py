@@ -5,7 +5,7 @@ Created on Wed Apr 27 13:37:59 2016
 @author: charlie
 """
 
-from pyMix import GMM, SphericalGMM, DiagonalGMM, MPPCA
+from pyMix import GMM, SphericalGMM, DiagonalGMM, MPPCA, MFA
 from util import _generate_mixture_data, plot_cov_ellipse, plot_density
 import matplotlib.pyplot as plt
 #import numpy as np
@@ -15,10 +15,11 @@ def main():
     data_dim = 2
     n_components = 3
     X = _generate_mixture_data(data_dim, n_components, n_examples)    
-#    gmm = GMM(n_components=n_components)
+    gmm = GMM(n_components=n_components)
 #    gmm = SphericalGMM(n_components=n_components)
 #    gmm = DiagonalGMM(n_components=n_components)
-    gmm = MPPCA(n_components=n_components, latent_dim=1)
+#    gmm = MPPCA(n_components=n_components, latent_dim=1)
+#    gmm = MFA(n_components=n_components, latent_dim=1)
     
     # Fit GMM
     gmm.fit(X, init_method='kmeans')
@@ -29,6 +30,6 @@ def main():
     
     # Plot results
     plot_density(gmm, X=X)
-    plt.savefig('test.png', dpi=600)
+#    plt.savefig('test.png', dpi=600)
            
 main()
