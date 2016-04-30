@@ -1,3 +1,3 @@
 # pyMM
 mixture models in Python
-![](test.png)
+![](test.png =250x)
