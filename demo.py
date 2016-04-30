@@ -29,6 +29,6 @@ def main():
     
     # Plot results
     plot_density(gmm, X=X)
-    plt.savefig('test.pdf', dpi=600)
+    plt.savefig('test.png', dpi=600)
            
 main()
