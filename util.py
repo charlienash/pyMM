@@ -106,7 +106,7 @@ def plot_density(model, x_range='auto', y_range='auto', n_grid=100,
     grid_ll = model.score_samples(X_grid)
     grid_prob = np.exp(grid_ll) # Convert to probability density
     grid_prob = grid_prob.reshape((n_grid, n_grid))
-    
+        
     # Plot contours
     plt.contourf(x, y, grid_prob, **contour_options)
 
@@ -119,9 +119,6 @@ def plot_density(model, x_range='auto', y_range='auto', n_grid=100,
     plt.ylim(y_range)
     plt.xticks([])
     plt.yticks([])
-    plt.show()
-#    
-#X = _generate_mixture_data(2, 2, 1000)    
-#plt.clf()
-#plt.scatter(X[:,0], X[:,1])
-#def _gmm_log_lik(X, mu_list, Sigma_list, components):
+    plt.show()    
+    fig = plt.gcf()
+    fig.set_size_inches(4, 4, forward=True)
