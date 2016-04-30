@@ -19,7 +19,7 @@ import numpy.random as rd
 #from numba import jit
 from random import seed
 #import GenModel
-from helper import _mv_gaussian_pdf, _get_rand_cov_mat
+from util import _mv_gaussian_pdf, _get_rand_cov_mat
 #from scipy.stats import multivariate_normal
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
@@ -144,10 +144,10 @@ class GMM():
             'responsibilities' : responsibilities
              }
              
-        # Compute log-likelihood
-        ll = np.log(r_sum).sum()
-
-        return ss, ll
+        # Compute log-likelihood of each example
+        sample_ll = np.log(r_sum)
+        
+        return ss, sample_ll
 
     def _m_step(self, X, ss, params):
         """ M-Step of the EM-algorithm.
@@ -228,9 +228,10 @@ class GMM():
         for i in range(self.max_iter):
 
             # E-Step
-            ss, ll = self._e_step(X, params)
+            ss, sample_ll = self._e_step(X, params)
 
             # Evaluate likelihood
+            ll = sample_ll.sum()
             if self.verbose:
                 print("Iter {:d}   NLL: {:.3f}   Change: {:.3f}".format(i,
                       -ll, -(ll-oldL)), flush=True)
@@ -286,39 +287,37 @@ class GMM():
                 z = np.argmin(r > components_cumsum)               
                 samples[n] = rd.multivariate_normal(mu_list[z], Sigma_list[z])                
             return samples
+            
+    def score_samples(self, X):
+        if not self.isFitted:
+            print("Model is not yet fitted. First use fit to learn the model"
+                   + " params.")
+        else:
+            # Apply one step of E-step to get the sample log-likelihoods
+            return self._e_step(X, self.params)[1]
 
+    def score(self, X):
+        """Compute the average log-likelihood of data matrix X
 
-#    def score(self, X):
-#        """Compute the average log-likelihood of data matrix X
-#
-#        Parameters
-#        ----------
-#        X: array, shape (n_samples, n_features)
-#            The data
-#
-#        Returns
-#        -------
-#        meanLl: array, shape (n_samples,)
-#            Log-likelihood of each sample under the current model
-#        """
-#        if not self.isFitted:
-#            print("Model is not yet fitted. First use fit to learn the model"
-#                   + " params.")
-#        else:
-#            # Get fitted parameters
-#            params = {
-#                     'sigmaSq': self.noiseVariance,
-#                     'W' : self.components,
-#                     'b' : self.bias
-#                     }
-#
-#            # Apply one step of E-step to get the total log likelihood
-#            L = self._e_step(X, params)[1]
-#
-#            # Divide by number of examples to get average log likelihood
-#            n_examples = np.shape(X)[0]
-#            mean_ll = L / n_examples
-#            return mean_ll
+        Parameters
+        ----------
+        X: array, shape (n_samples, n_features)
+            The data
+
+        Returns
+        -------
+        meanLl: array, shape (n_samples,)
+            Log-likelihood of each sample under the current model
+        """
+        if not self.isFitted:
+            print("Model is not yet fitted. First use fit to learn the model"
+                   + " params.")
+        else:
+            # Apply one step of E-step to get the sample log-likelihoods
+            sample_ll = self.score_samples(X)
+
+            # Divide by number of examples to get average log likelihood
+            return sample_ll.mean()
             
 class SphericalGMM(GMM):
     
@@ -545,9 +544,9 @@ class MPPCA(GMM):
              }
              
         # Compute log-likelihood
-        ll = np.log(r_sum).sum()
+        sample_ll = np.log(r_sum)
 
-        return ss, ll
+        return ss, sample_ll
     
     def _m_step(self, X, ss, params):
         """ M-Step of the EM-algorithm.
