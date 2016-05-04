@@ -13,13 +13,13 @@ import matplotlib.pyplot as plt
 def main():
     n_examples = 1000
     data_dim = 2
-    n_components = 3
+    n_components = 5
     X = _generate_mixture_data(data_dim, n_components, n_examples)    
-    gmm = GMM(n_components=n_components)
+#    gmm = GMM(n_components=n_components)
 #    gmm = SphericalGMM(n_components=n_components)
 #    gmm = DiagonalGMM(n_components=n_components)
 #    gmm = MPPCA(n_components=n_components, latent_dim=1)
-#    gmm = MFA(n_components=n_components, latent_dim=1)
+    gmm = MFA(n_components=n_components, latent_dim=1)
     
     # Fit GMM
     gmm.fit(X, init_method='kmeans')
@@ -29,7 +29,7 @@ def main():
 #    mu_list = gmm.params['mu_list']
     
     # Plot results
-    plot_density(gmm, X=X)
+    plot_density(gmm, X=X, n_grid=50)
 #    plt.savefig('test.png', dpi=600)
            
 main()

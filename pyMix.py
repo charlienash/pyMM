@@ -16,9 +16,7 @@ This implementation uses the EM algorithm to handle missing data.
 
 import numpy as np
 import numpy.random as rd
-#from numba import jit
 from random import seed
-#import GenModel
 from util import _mv_gaussian_pdf, _get_rand_cov_mat
 #from scipy.stats import multivariate_normal
 from sklearn.cluster import KMeans
@@ -319,6 +317,155 @@ class GMM():
             # Divide by number of examples to get average log likelihood
             return sample_ll.mean()
             
+class GMM_Miss(GMM):
+    
+    def _e_step(self, X, params):
+        """ E-Step of the EM-algorithm.
+
+        The E-step takes the existing parameters, for the components, bias
+        and noise variance and computes sufficient statistics for the M-Step
+        by taking the expectation of latent variables conditional on the
+        visible variables. Also returns the likelihood for the data X and
+        projections into latent space of the data.
+
+        Args
+        ----
+        X : array, [nExamples, nFeatures]
+            Matrix of training data, where nExamples is the number of
+            examples and nFeatures is the number of features.
+        W : array, [dataDim, latentDim]
+            Component matrix data. Maps latent points to data space.
+        b : array, [dataDim,]
+            Data bias.
+        sigmaSq : float
+            Noise variance parameter.
+
+        Returns
+        -------
+        ss : dict
+
+        proj :
+
+        ll :
+        """
+        # Get current params
+        Sigma_list = params['Sigma_list']
+        mu_list = params['mu_list']
+        components = params['components']
+
+        observed_list = [np.array(np.where(~np.isnan(row))).flatten() for row in X]
+        n_examples, data_dim = np.shape(X)
+
+#        x_list = [np.zeros(data_dim) for k in range(self.n_components)]
+#        xx_list = [np.zeros([data_dim, data_dim]) for k in range(self.n_components)]
+#        cum_ent = 0
+#        n_miss = 0
+        
+        r = np.zeros([n_examples, self.n_components])
+
+        # Loop over data points
+        for n in range(n_examples):
+            id_obs = observed_list[n]
+#            id_miss = np.setdiff1d(np.arange(data_dim), id_obs)
+#            n_miss = len(id_miss)
+            row = X[n,:]
+            row_obs = row[id_obs]
+            
+            for k, mu, Sigma in zip(range(self.n_components), mu_list, Sigma_list):                
+                mu_obs = mu[id_obs]
+#                mu_miss = mu[id_miss]
+                Sigma_obs = Sigma[np.ix_(id_obs,id_obs)]
+#                Sigma_miss = Sigma[np.ix_(id_miss,id_miss)]
+#                Sigma_obs_miss = Sigma[np.ix_(id_obs,id_miss)]
+#                Sigma_miss_obs = Sigma[np.ix_(id_miss,id_obs)]
+                
+                r[n,k] = _mv_gaussian_pdf(row_obs, mu_obs, Sigma_obs)
+        r = r * components
+        r_sum = r.sum(axis=1)
+#        responsibilities = r / r_sum[:,np.newaxis]
+
+#            # Simplify for case with no missing data
+#            if nMiss == 0:
+#                xTotCum = xTotCum + rowObserved
+#                xxOuterCum = xxOuterCum + np.outer(rowObserved, rowObserved)
+#
+#            # Otherwise deal with missing data
+#            else:
+#                # Get conditional distribution p(id_miss | x_vis, params)
+#                meanCond = (muMiss +
+#                            SigmaMissObs.dot(np.linalg.inv(SigmaObs)).dot(rowObserved - muObs))
+#                SigmaCond = SigmaMiss - SigmaMissObs.dot(np.linalg.inv(SigmaObs)).dot(SigmaObsMiss)
+#
+#                # Get sufficient statistics
+#                xTot = np.empty(dataDim)
+#                xTot[xo] = rowObserved
+#                xTot[xm] = meanCond
+#                xTotCum = xTotCum + xTot
+#
+#                xxOuter = np.empty([dataDim, dataDim])
+#                xxOuter[np.ix_(xo, xo)] = np.outer(rowObserved, rowObserved)
+#                xxOuter[np.ix_(xo, xm)] = np.outer(rowObserved, meanCond)
+#                xxOuter[np.ix_(xm, xo)] = np.outer(meanCond, rowObserved)
+#                xxOuter[np.ix_(xm, xm)] = np.outer(meanCond, meanCond) + SigmaCond
+#                xxOuterCum = xxOuterCum + xxOuter
+#
+#                # Non constant terms of entopy of p(id_miss| id_obs, params) for
+#                # computation of log likelihood
+#                cumEnt = cumEnt + 0.5*np.log(np.linalg.det(SigmaCond))
+#
+#            # Increment cumulative number of missing vars
+#            nHiddenCum = nHiddenCum + nMiss
+#
+#        # Constant entropy term p(z | id_obs, theta)
+#        constEnt = 0.5*nHiddenCum*(1 + np.log(2*np.pi))
+#
+#        # Expected complete data log-likelihood
+#        ell = (
+#             - 0.5*nExamples*np.log(np.linalg.det(2*np.pi*Sigma))
+#             - 0.5*np.trace(np.linalg.inv(Sigma).dot(
+#               xxOuterCum + nExamples*np.outer(mu, mu) - 2*np.outer(mu, xTotCum)))
+#              )
+#
+#        # Compute likelihood
+#        ll = cumEnt + constEnt + ell
+#
+#        # Store sufficient statistics in dictionary
+#        ss = {
+#            'xTot' : xTotCum,
+#            'xxOuter' : xxOuterCum,
+#            'nExamples' : nExamples
+#             }
+#
+#        return ss, ll
+        
+#        
+#        # Get params
+#        mu_list = params['mu_list']
+#        components = params['components']
+#        n_examples, data_dim = X.shape
+#        
+#        # Compute responsibilities
+#        r = np.zeros([n_examples, self.n_components])
+#        
+#        # Get Sigma from params
+#        Sigma_list = self._params_to_Sigma(params)
+#        
+#        for k, mu, Sigma in zip(range(self.n_components), mu_list, Sigma_list):
+#            r[:,k] = _mv_gaussian_pdf(X, mu, Sigma)
+#        r = r * components
+#        r_sum = r.sum(axis=1)
+#        responsibilities = r / r_sum[:,np.newaxis]
+#            
+#        # Store sufficient statistics in dictionary
+#        ss = {
+#            'responsibilities' : responsibilities
+#             }
+#             
+#        # Compute log-likelihood of each example
+#        sample_ll = np.log(r_sum)
+#        
+#        return ss, sample_ll
+            
 class SphericalGMM(GMM):
     
     def _init_params(self, init_method, X=None):
@@ -445,6 +592,66 @@ class DiagonalGMM(GMM):
             return params['Psi_list']
             
 class MPPCA(GMM):
+    """Mixtures of probabilistic principal components analysis (PPCA) models.
+
+    A generative latent variable model.
+
+    PPCA assumes that the observed data is generated by first generating latent
+    variables z from a Gaussian distribution p(z), then linearly transforming 
+    these variables with a weights matrix W, and then finally adding spherical 
+    Gaussian noise. PPCA can be viewed as a Gaussian model with a low-rank
+    approximation to the covariance matrix. It can be useful in the case 
+    where there are many dimensions, but not many examples. Here a 
+    full-covariance model needs to estimate many parameters, and will have a 
+    tendency to overfit, whereas a PPCA model can have considerably fewer 
+    parameters, and therefore is less likely to overfit.
+
+    The parameters of the model are the transformation matrix W , the mean mu, 
+    and the noise variance sigma_sq.
+    
+    The mixture of PPCA models (MPPCA) additionally assumes that the data can
+    come from a number of PPCA components, with each component being selected 
+    from a disrete probability distribution. Thus the parameters are W_k, mu_k
+    and sigma_sq_k for each component k, and component probabilities alpha_k
+    for each component.
+
+    MPPCA performs maximum likelihood or MAP estimation of the model parameters using
+    the expectation-maximisation algorithm (EM algorithm).
+
+    Attributes
+    ----------
+
+    latent_dim : int
+        Dimensionality of latent space. The number of variables that are
+        transformed by the weight matrix to the data space.
+
+    n_components : array, [latentDim, nFeatures]
+        Transformation matrix parameter.
+
+    bias: array, [nFeatures]
+        Bias parameter.
+
+    noiseVariance : float
+        Noise variance parameter. Variance of noise that is added to linearly
+        transformed latent variables to generate data.
+
+    standardize : bool, optional
+        When True, the mean is subtracted from the data, and each feature is
+        divided by it's standard deviation so that the mean and variance of
+        the transformed features are 0 and 1 respectively.
+
+    componentPrior : float >= 0
+        Gaussian component matrix hyperparameter. If > 0 then a Gaussian prior
+        is applied to each column of the component matrix with covariance
+        componentPrior^-1 * noiseVariance. This has the effect
+        of regularising the component matrix.
+
+    tol : float
+        Stopping tolerance for EM algorithm
+
+    maxIter : int
+        Maximum number of iterations for EM algorithm
+    """
     
     def __init__(self, n_components, latent_dim, tol=1e-3, max_iter=1000, 
                   random_state=0, verbose=True):
@@ -677,12 +884,11 @@ class MFA(GMM):
         Psi_list = params['Psi_list']
         n_examples, data_dim = X.shape
         
-        # Compute responsibilities
-        r = np.zeros([n_examples, self.n_components])
-        
         # Get Sigma from params
         Sigma_list = self._params_to_Sigma(params)
         
+        # Compute responsibilities
+        r = np.zeros([n_examples, self.n_components])
         for k, mu, Sigma in zip(range(self.n_components), mu_list, Sigma_list):
             r[:,k] = _mv_gaussian_pdf(X, mu, Sigma)
         r = r * components
