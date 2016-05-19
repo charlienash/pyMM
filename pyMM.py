@@ -473,13 +473,14 @@ class SphericalGMM(GMM):
             kmeans = KMeans(self.n_components)
             kmeans.fit(X)
             mu_list = [k for k in kmeans.cluster_centers_]
-            sigma_sq_list = [np.mean(np.diag(np.cov(X[kmeans.labels_==k,:].T))) for k in range(self.n_components)]
-            components = np.array([np.sum(kmeans.labels_==k) / n_examples for k in range(self.n_components)])
-            params_init = {
-                            'mu_list' : mu_list,
-                            'sigma_sq_list' : sigma_sq_list,
-                            'components' : components
-                            }
+            sigma_sq_list = [np.mean(np.diag(
+                             np.cov(X[kmeans.labels_ == k, :].T))) for k in
+                             range(self.n_components)]
+            components = np.array([np.sum(kmeans.labels_ == k) / n_examples
+                                   for k in range(self.n_components)])
+            params_init = {'mu_list': mu_list,
+                           'sigma_sq_list': sigma_sq_list,
+                           'components': components}
             return params_init
 
     def _m_step(self, ss, params):
@@ -504,31 +505,28 @@ class SphericalGMM(GMM):
 
         # Update components param
         components = np.mean(resp, axis=0)
-        d = len(params['mu_list'][0])
 
         # Update mean / Sigma params
         mu_list = []
         sigma_sq_list = []
         for r, x, xx in zip(resp.T, x_list, xx_list):
-            mu = np.sum(x*r[:,np.newaxis], axis=0) / r.sum()
+            mu = np.sum(x*r[:, np.newaxis], axis=0) / r.sum()
             mu_list.append(mu)
-            Sigma = (np.sum((xx*r[:,np.newaxis,np.newaxis]), axis=0) /
+            Sigma = (np.sum((xx*r[:, np.newaxis, np.newaxis]), axis=0) /
                      r.sum() - np.outer(mu, mu))
             sigma_sq = np.mean(np.diag(Sigma))
             sigma_sq_list.append(sigma_sq)
 
         # Store params in dictionary
-        params = {
-            'sigma_sq_list' : sigma_sq_list,
-            'mu_list' : mu_list,
-            'components' : components
-             }
-
+        params = {'sigma_sq_list': sigma_sq_list,
+                  'mu_list': mu_list,
+                  'components': components}
         return params
 
     def _params_to_Sigma(self, params):
             return [sigma_sq*np.eye(self.data_dim) for sigma_sq in
-                params['sigma_sq_list']]
+                    params['sigma_sq_list']]
+
 
 class SphericalGMM_Miss(GMM_Miss):
 
@@ -541,13 +539,14 @@ class SphericalGMM_Miss(GMM_Miss):
             X = imputer.fit_transform(X)
             kmeans.fit(X)
             mu_list = [k for k in kmeans.cluster_centers_]
-            sigma_sq_list = [np.mean(np.diag(np.cov(X[kmeans.labels_==k,:].T))) for k in range(self.n_components)]
-            components = np.array([np.sum(kmeans.labels_==k) / n_examples for k in range(self.n_components)])
-            params_init = {
-                            'mu_list' : mu_list,
-                            'sigma_sq_list' : sigma_sq_list,
-                            'components' : components
-                            }
+            sigma_sq_list = [np.mean(np.diag(
+                             np.cov(X[kmeans.labels_ == k, :].T))) for k in
+                             range(self.n_components)]
+            components = np.array([np.sum(kmeans.labels_ == k) / n_examples
+                                   for k in range(self.n_components)])
+            params_init = {'mu_list': mu_list,
+                           'sigma_sq_list': sigma_sq_list,
+                           'components': components}
             return params_init
 
     def _m_step(self, ss, params):
@@ -572,31 +571,28 @@ class SphericalGMM_Miss(GMM_Miss):
 
         # Update components param
         components = np.mean(resp, axis=0)
-        d = len(params['mu_list'][0])
 
         # Update mean / Sigma params
         mu_list = []
         sigma_sq_list = []
         for r, x, xx in zip(resp.T, x_list, xx_list):
-            mu = np.sum(x*r[:,np.newaxis], axis=0) / r.sum()
+            mu = np.sum(x*r[:, np.newaxis], axis=0) / r.sum()
             mu_list.append(mu)
-            Sigma = (np.sum((xx*r[:,np.newaxis,np.newaxis]), axis=0) /
+            Sigma = (np.sum((xx*r[:, np.newaxis, np.newaxis]), axis=0) /
                      r.sum() - np.outer(mu, mu))
             sigma_sq = np.mean(np.diag(Sigma))
             sigma_sq_list.append(sigma_sq)
 
         # Store params in dictionary
-        params = {
-            'sigma_sq_list' : sigma_sq_list,
-            'mu_list' : mu_list,
-            'components' : components
-             }
-
+        params = {'sigma_sq_list': sigma_sq_list,
+                  'mu_list': mu_list,
+                  'components': components}
         return params
 
     def _params_to_Sigma(self, params):
             return [sigma_sq*np.eye(self.data_dim) for sigma_sq in
-                params['sigma_sq_list']]
+                    params['sigma_sq_list']]
+
 
 class DiagonalGMM(GMM):
 
@@ -607,13 +603,13 @@ class DiagonalGMM(GMM):
             kmeans = KMeans(self.n_components)
             kmeans.fit(X)
             mu_list = [k for k in kmeans.cluster_centers_]
-            Psi_list = [np.diag(np.diag(np.cov(X[kmeans.labels_==k,:].T))) for k in range(self.n_components)]
-            components = np.array([np.sum(kmeans.labels_==k) / n_examples for k in range(self.n_components)])
-            params_init = {
-                            'mu_list' : mu_list,
-                            'Psi_list' : Psi_list,
-                            'components' : components
-                            }
+            Psi_list = [np.diag(np.diag(np.cov(X[kmeans.labels_ == k, :].T)))
+                        for k in range(self.n_components)]
+            components = np.array([np.sum(kmeans.labels_ == k) / n_examples
+                                   for k in range(self.n_components)])
+            params_init = {'mu_list': mu_list,
+                           'Psi_list': Psi_list,
+                           'components': components}
             return params_init
 
     def _m_step(self, ss, params):
@@ -643,24 +639,22 @@ class DiagonalGMM(GMM):
         mu_list = []
         Psi_list = []
         for r, x, xx in zip(resp.T, x_list, xx_list):
-            mu = np.sum(x*r[:,np.newaxis], axis=0) / r.sum()
+            mu = np.sum(x*r[:, np.newaxis], axis=0) / r.sum()
             mu_list.append(mu)
-            Sigma = (np.sum((xx*r[:,np.newaxis,np.newaxis]), axis=0) /
+            Sigma = (np.sum((xx*r[:, np.newaxis, np.newaxis]), axis=0) /
                      r.sum() - np.outer(mu, mu))
             Psi = np.diag(np.diag(Sigma))
             Psi_list.append(Psi)
 
         # Store params in dictionary
-        params = {
-            'Psi_list' : Psi_list,
-            'mu_list' : mu_list,
-            'components' : components
-             }
-
+        params = {'Psi_list': Psi_list,
+                  'mu_list': mu_list,
+                  'components': components}
         return params
 
     def _params_to_Sigma(self, params):
             return params['Psi_list']
+
 
 class DiagonalGMM_Miss(GMM_Miss):
 
@@ -673,13 +667,13 @@ class DiagonalGMM_Miss(GMM_Miss):
             X = imputer.fit_transform(X)
             kmeans.fit(X)
             mu_list = [k for k in kmeans.cluster_centers_]
-            Psi_list = [np.diag(np.diag(np.cov(X[kmeans.labels_==k,:].T))) for k in range(self.n_components)]
-            components = np.array([np.sum(kmeans.labels_==k) / n_examples for k in range(self.n_components)])
-            params_init = {
-                            'mu_list' : mu_list,
-                            'Psi_list' : Psi_list,
-                            'components' : components
-                            }
+            Psi_list = [np.diag(np.diag(np.cov(X[kmeans.labels_ == k, :].T)))
+                        for k in range(self.n_components)]
+            components = np.array([np.sum(kmeans.labels_ == k) / n_examples
+                                   for k in range(self.n_components)])
+            params_init = {'mu_list': mu_list,
+                           'Psi_list': Psi_list,
+                           'components': components}
             return params_init
 
     def _m_step(self, ss, params):
@@ -709,24 +703,23 @@ class DiagonalGMM_Miss(GMM_Miss):
         mu_list = []
         Psi_list = []
         for r, x, xx in zip(resp.T, x_list, xx_list):
-            mu = np.sum(x*r[:,np.newaxis], axis=0) / r.sum()
+            mu = np.sum(x*r[:, np.newaxis], axis=0) / r.sum()
             mu_list.append(mu)
-            Sigma = (np.sum((xx*r[:,np.newaxis,np.newaxis]), axis=0) /
+            Sigma = (np.sum((xx*r[:, np.newaxis, np.newaxis]), axis=0) /
                      r.sum() - np.outer(mu, mu))
             Psi = np.diag(np.diag(Sigma))
             Psi_list.append(Psi)
 
         # Store params in dictionary
-        params = {
-            'Psi_list' : Psi_list,
-            'mu_list' : mu_list,
-            'components' : components
-             }
+        params = {'Psi_list': Psi_list,
+                  'mu_list': mu_list,
+                  'components': components}
 
         return params
 
     def _params_to_Sigma(self, params):
             return params['Psi_list']
+
 
 class MPPCA(GMM):
     """Mixtures of probabilistic principal components analysis (PPCA) models.
@@ -752,8 +745,8 @@ class MPPCA(GMM):
     and sigma_sq_k for each component k, and component probabilities alpha_k
     for each component.
 
-    MPPCA performs maximum likelihood or MAP estimation of the model parameters using
-    the expectation-maximisation algorithm (EM algorithm).
+    MPPCA performs maximum likelihood or MAP estimation of the model
+    parameters using the expectation-maximisation algorithm (EM algorithm).
 
     Attributes
     ----------
@@ -791,10 +784,10 @@ class MPPCA(GMM):
     """
 
     def __init__(self, n_components, latent_dim, tol=1e-3, max_iter=1000,
-                  random_state=0, verbose=True):
+                 random_state=0, verbose=True):
 
-        super(MPPCA,self).__init__(n_components, tol, max_iter,
-            random_state, verbose)
+        super(MPPCA, self).__init__(n_components, tol, max_iter, random_state,
+                                    verbose)
         self.latent_dim = latent_dim
 
     def _init_params(self, init_method, X=None):
@@ -807,18 +800,17 @@ class MPPCA(GMM):
             W_list = []
             sigma_sq_list = []
             for k in range(self.n_components):
-                data_k = X[kmeans.labels_==k,:]
+                data_k = X[kmeans.labels_ == k, :]
                 pca = PCA(n_components=self.latent_dim)
                 pca.fit(data_k)
                 W_list.append(pca.components_.T)
                 sigma_sq_list.append(0.1)
-            components = np.array([np.sum(kmeans.labels_==k) / n_examples for k in range(self.n_components)])
-            params_init = {
-                            'mu_list' : mu_list,
-                            'W_list' : W_list,
-                            'sigma_sq_list' : sigma_sq_list,
-                            'components' : components
-                            }
+            components = np.array([np.sum(kmeans.labels_ == k) / n_examples
+                                   for k in range(self.n_components)])
+            params_init = {'mu_list': mu_list,
+                           'W_list': W_list,
+                           'sigma_sq_list': sigma_sq_list,
+                           'components': components}
             return params_init
 
     def _e_step(self, X, params):
@@ -864,10 +856,10 @@ class MPPCA(GMM):
         Sigma_list = self._params_to_Sigma(params)
 
         for k, mu, Sigma in zip(range(self.n_components), mu_list, Sigma_list):
-            r[:,k] = multivariate_normal.pdf(X, mu, Sigma)
+            r[:, k] = multivariate_normal.pdf(X, mu, Sigma)
         r = r * components
         r_sum = r.sum(axis=1)
-        responsibilities = r / r_sum[:,np.newaxis]
+        responsibilities = r / r_sum[:, np.newaxis]
 
         # Get sufficient statistics E[z] and E[zz^t] for each component
         z_list = []
@@ -876,25 +868,24 @@ class MPPCA(GMM):
         xx_list = []
         for mu, W, sigma_sq in zip(mu_list, W_list, sigma_sq_list):
             dev = X - mu
-            F_inv = np.linalg.inv(W.T.dot(W) + sigma_sq*np.eye(self.latent_dim))
+            F_inv = (np.linalg.inv(W.T.dot(W) +
+                     sigma_sq*np.eye(self.latent_dim)))
             z = dev.dot(W).dot(F_inv)
             z_list.append(z)
-            zz = sigma_sq*F_inv + z[:,:,np.newaxis] * z[:,np.newaxis,:]
+            zz = sigma_sq*F_inv + z[:, :, np.newaxis] * z[:, np.newaxis, :]
             zz_list.append(zz)
-            xx = dev[:,:,np.newaxis] * dev[:,np.newaxis,:]
+            xx = dev[:, :, np.newaxis] * dev[:, np.newaxis, :]
             xx_list.append(xx)
-            xz = dev[:,:,np.newaxis] * z[:,np.newaxis,:]
+            xz = dev[:, :, np.newaxis] * z[:, np.newaxis, :]
             xz_list.append(xz)
 
         # Store sufficient statistics in dictionary
-        ss = {
-            'responsibilities' : responsibilities,
-            'x_list' : [X for k in range(self.n_components)],
-            'xx_list' : xx_list,
-            'xz_list' : xz_list,
-            'z_list' : z_list,
-            'zz_list' : zz_list
-             }
+        ss = {'responsibilities': responsibilities,
+              'x_list': [X for k in range(self.n_components)],
+              'xx_list': xx_list,
+              'xz_list': xz_list,
+              'z_list': z_list,
+              'zz_list': zz_list}
 
         # Compute log-likelihood
         sample_ll = np.log(r_sum)
