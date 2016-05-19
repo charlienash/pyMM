@@ -1,9 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Wed Apr 27 13:37:59 2016
-
-@author: charlie
-"""
 import numpy as np
 from pyMM import (GMM, SphericalGMM, DiagonalGMM, MPPCA, MFA, GMM_Miss,
                   SphericalGMM_Miss, DiagonalGMM_Miss, MPPCA_Miss, MFA_Miss)
