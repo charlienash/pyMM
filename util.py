@@ -80,13 +80,14 @@ def plot_cov_ellipse(cov, pos, nstd=2, ax=None, **kwargs):
     
 def plot_density(model, x_range='auto', y_range='auto', n_grid=100, 
                    with_scatter=True, X=None, contour_options=None, 
-                   scatter_options=None):
+                   scatter_options=None, with_missing=False, X_miss=None):
                        
     # Set default options
     if contour_options is None:
         contour_options = {'cmap' : plt.cm.plasma}
     if scatter_options is None: 
         scatter_options = {'color' : 'w', 'alpha' : 0.5, 'lw' : 0}
+        scatter_options_miss = {'color' : 'r', 'alpha' : 0.5, 'lw' : 0}
         
     # Automatic x_range and y_range
     if x_range == 'auto' and X is not None:
@@ -112,7 +113,12 @@ def plot_density(model, x_range='auto', y_range='auto', n_grid=100,
 
     # Add scatter if enables
     if with_scatter:
-        plt.scatter(X[:,0], X[:,1], **scatter_options) # data                       
+        if with_missing:
+            id_miss = np.isnan(X_miss).any(axis=1)
+            plt.scatter(X[~id_miss,0], X[~id_miss,1], **scatter_options)
+            plt.scatter(X[id_miss,0], X[id_miss,1], **scatter_options_miss)
+        else:
+            plt.scatter(X[:,0], X[:,1], **scatter_options) # data                  
 
     # Plot options
     plt.xlim(x_range)
