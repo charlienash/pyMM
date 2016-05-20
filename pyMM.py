@@ -15,6 +15,7 @@ This implementation uses the EM algorithm to handle missing data.
 # Author: Charlie Nash <charlie.tc.nash@gmail.com>
 
 import numpy as np
+import scipy as sp
 import numpy.random as rd
 from random import seed
 from scipy.stats import multivariate_normal
@@ -126,16 +127,16 @@ class GMM():
         n_examples, data_dim = X.shape
 
         # Compute responsibilities
-        r = np.zeros([n_examples, self.n_components])
+        log_r = np.zeros([n_examples, self.n_components])
 
         # Get Sigma from params
         Sigma_list = self._params_to_Sigma(params)
 
         for k, mu, Sigma in zip(range(self.n_components), mu_list, Sigma_list):
-            r[:, k] = multivariate_normal.pdf(X, mu, Sigma)
-        r = r * components
-        r_sum = r.sum(axis=1)
-        responsibilities = r / r_sum[:, np.newaxis]
+            log_r[:, k] = multivariate_normal.logpdf(X, mu, Sigma)
+        log_r = log_r + np.log(components)
+        log_r_sum = sp.misc.logsumexp(log_r, axis=1)
+        responsibilities = np.exp(log_r - log_r_sum[:, np.newaxis])
 
         x_list = [X for k in range(self.n_components)]
         xx_list = [X[:, :, np.newaxis] * X[:, np.newaxis, :] for k in
@@ -147,7 +148,7 @@ class GMM():
               'xx_list': xx_list}
 
         # Compute log-likelihood of each example
-        sample_ll = np.log(r_sum)
+        sample_ll = log_r_sum
 
         return ss, sample_ll
 
@@ -925,40 +926,34 @@ class MPPCA(GMM):
         sigma_sq_list = []
         for r, W, x, z, zz, xz, xx in zip(resp.T, W_list_old, x_list, z_list,
                                           zz_list, xz_list, xx_list):
-
-            # mu first
             resid = x - z.dot(W.T)
-            mu = np.sum(resid*r[:,np.newaxis], axis=0) / r.sum()
+            mu = np.sum(resid*r[:, np.newaxis], axis=0) / r.sum()
             mu_list.append(mu)
-#            W1 = ((x-mu)*r[:,np.newaxis]).T.dot(z)
-            W1 = np.sum(xz*r[:,np.newaxis,np.newaxis], axis=0)
-            W2 = np.linalg.inv(np.sum(zz*r[:,np.newaxis,np.newaxis], axis=0))
+            W1 = np.sum(xz*r[:, np.newaxis, np.newaxis], axis=0)
+            W2 = np.linalg.inv(np.sum(zz*r[:, np.newaxis, np.newaxis],
+                                      axis=0))
             W = W1.dot(W2)
             W_list.append(W)
             s1 = np.trace(xx, axis1=1, axis2=2)
-#            s1 = np.diag((x-mu).dot((x-mu).T))
             s2 = -2*np.trace(xz.dot(W.T), axis1=1, axis2=2)
-#            s2 = np.diag(-2*z.dot(W.T).dot((x-mu).T))
             s3 = np.trace(zz*W.T.dot(W), axis1=1, axis2=2)
             sigma_sq = np.sum(r*(s1 + s2 + s3)) / (self.data_dim * r.sum())
             sigma_sq_list.append(sigma_sq)
 
         # Store params in dictionary
-        params = {
-            'W_list' : W_list,
-            'sigma_sq_list' : sigma_sq_list,
-            'mu_list' : mu_list,
-            'components' : components
-             }
-
+        params = {'W_list': W_list,
+                  'sigma_sq_list': sigma_sq_list,
+                  'mu_list': mu_list,
+                  'components': components}
         return params
 
     def _params_to_Sigma(self, params):
         W_list = params['W_list']
         sigma_sq_list = params['sigma_sq_list']
         Sigma_list = [W.dot(W.T) + sigma_sq*np.eye(self.data_dim)
-            for W,sigma_sq in zip(W_list, sigma_sq_list)]
+                      for W, sigma_sq in zip(W_list, sigma_sq_list)]
         return Sigma_list
+
 
 class MPPCA_Miss(MPPCA):
     """Mixtures of probabilistic principal components analysis (PPCA) models.
@@ -984,8 +979,8 @@ class MPPCA_Miss(MPPCA):
     and sigma_sq_k for each component k, and component probabilities alpha_k
     for each component.
 
-    MPPCA performs maximum likelihood or MAP estimation of the model parameters using
-    the expectation-maximisation algorithm (EM algorithm).
+    MPPCA performs maximum likelihood or MAP estimation of the model
+    parameters using the expectation-maximisation algorithm (EM algorithm).
 
     Attributes
     ----------
@@ -1034,18 +1029,17 @@ class MPPCA_Miss(MPPCA):
             W_list = []
             sigma_sq_list = []
             for k in range(self.n_components):
-                data_k = X[kmeans.labels_==k,:]
+                data_k = X[kmeans.labels_ == k, :]
                 pca = PCA(n_components=self.latent_dim)
                 pca.fit(data_k)
                 W_list.append(pca.components_.T)
                 sigma_sq_list.append(0.1)
-            components = np.array([np.sum(kmeans.labels_==k) / n_examples for k in range(self.n_components)])
-            params_init = {
-                            'mu_list' : mu_list,
-                            'W_list' : W_list,
-                            'sigma_sq_list' : sigma_sq_list,
-                            'components' : components
-                            }
+            components = np.array([np.sum(kmeans.labels_ == k) / n_examples
+                                   for k in range(self.n_components)])
+            params_init = {'mu_list': mu_list,
+                           'W_list': W_list,
+                           'sigma_sq_list': sigma_sq_list,
+                           'components': components}
             return params_init
 
     def _e_step(self, X, params):
@@ -1086,23 +1080,25 @@ class MPPCA_Miss(MPPCA):
         # Get Sigma from params
         Sigma_list = self._params_to_Sigma(params)
 
-        observed_list = [np.array(np.where(~np.isnan(row))).flatten() for row in X]
+        observed_list = [np.array(np.where(~np.isnan(row))).flatten() for
+                         row in X]
         n_examples, data_dim = np.shape(X)
 
-        r = np.zeros([n_examples, self.n_components])
-
         # Loop over data points computing responsibilities
+        r = np.zeros([n_examples, self.n_components])
         for n in range(n_examples):
             id_obs = observed_list[n]
-            row = X[n,:]
+            row = X[n, :]
             row_obs = row[id_obs]
-            for k, mu, Sigma in zip(range(self.n_components), mu_list, Sigma_list):
+            for k, mu, Sigma in zip(range(self.n_components), mu_list,
+                                    Sigma_list):
                 mu_obs = mu[id_obs]
-                Sigma_obs = Sigma[np.ix_(id_obs,id_obs)]
-                r[n,k] = multivariate_normal.pdf(row_obs[np.newaxis,:], mu_obs, Sigma_obs)
+                Sigma_obs = Sigma[np.ix_(id_obs, id_obs)]
+                r[n, k] = multivariate_normal.pdf(row_obs[np.newaxis, :],
+                                                  mu_obs, Sigma_obs)
         r = r * components
         r_sum = r.sum(axis=1)
-        responsibilities = r / r_sum[:,np.newaxis]
+        responsibilities = r / r_sum[:, np.newaxis]
 
         x_list = []
         xx_list = []
@@ -1110,8 +1106,8 @@ class MPPCA_Miss(MPPCA):
         zz_list = []
         xz_list = []
 
-        for k, mu, W, sigma_sq in zip(range(self.n_components), mu_list, W_list,
-                                      sigma_sq_list):
+        for k, mu, W, sigma_sq in zip(range(self.n_components), mu_list,
+                                      W_list, sigma_sq_list):
 
             x_tot = np.zeros([n_examples, data_dim])
             xx_tot = np.zeros([n_examples, data_dim, data_dim])
@@ -1123,7 +1119,7 @@ class MPPCA_Miss(MPPCA):
                 id_obs = observed_list[n]
                 id_miss = np.setdiff1d(np.arange(data_dim), id_obs)
                 n_miss = len(id_miss)
-                row = X[n,:]
+                row = X[n, :]
                 row_obs = row[id_obs]
 
 #                # Simplify for case with no missing data
@@ -1132,14 +1128,15 @@ class MPPCA_Miss(MPPCA):
 #                    xx_tot[n] = np.outer(row_obs, row_obs)
 
                 # Get missing and visible points
-                W_obs = W[id_obs,:]
-                W_miss = W[id_miss,:]
+                W_obs = W[id_obs, :]
+                W_miss = W[id_miss, :]
                 mu_obs = mu[id_obs]
                 mu_miss = mu[id_miss]
                 row_min_mu = row_obs - mu_obs
 
                 # Get conditional distribution of p(z | x_vis, params)
-                F_inv = np.linalg.inv(W_obs.T.dot(W_obs) + sigma_sq*np.eye(self.latent_dim))
+                F_inv = (np.linalg.inv(W_obs.T.dot(W_obs) +
+                         sigma_sq*np.eye(self.latent_dim)))
                 cov_z_cond = sigma_sq*F_inv
                 mean_z_cond = F_inv.dot(W_obs.T).dot(row_obs - mu_obs)
 
@@ -1148,19 +1145,23 @@ class MPPCA_Miss(MPPCA):
 
                 # Append sufficient statistics
                 z_tot[n] = mean_z_cond
-                zz_tot[n] = cov_z_cond + np.outer(mean_z_cond,mean_z_cond)
+                zz_tot[n] = cov_z_cond + np.outer(mean_z_cond, mean_z_cond)
 
-                x_tot[n,id_obs] = row_obs
-                x_tot[n,id_miss] = mean_x_miss
+                x_tot[n, id_obs] = row_obs
+                x_tot[n, id_miss] = mean_x_miss
 
-                xz_tot[n,id_miss,:] = W_miss.dot(zz_tot[n])
-                xz_tot[n,id_obs,:] = np.outer(row_min_mu, mean_z_cond)
+                xz_tot[n, id_miss, :] = W_miss.dot(zz_tot[n])
+                xz_tot[n, id_obs, :] = np.outer(row_min_mu, mean_z_cond)
 
                 xx = np.empty([data_dim, data_dim])
-                xx[np.ix_(id_obs,id_obs)] = np.outer(row_min_mu, row_min_mu)
-                xx[np.ix_(id_obs,id_miss)] = np.outer(row_min_mu, mean_x_miss - mu_miss)
-                xx[np.ix_(id_miss,id_obs)] = np.outer(mean_x_miss - mu_miss, row_min_mu)
-                xx[np.ix_(id_miss,id_miss)] = W_miss.dot(zz_tot[n]).dot(W_miss.T) + sigma_sq*np.eye(n_miss)
+                xx[np.ix_(id_obs, id_obs)] = np.outer(row_min_mu, row_min_mu)
+                xx[np.ix_(id_obs, id_miss)] = np.outer(row_min_mu,
+                                                       mean_x_miss - mu_miss)
+                xx[np.ix_(id_miss, id_obs)] = np.outer(mean_x_miss - mu_miss,
+                                                       row_min_mu)
+                xx[np.ix_(id_miss, id_miss)] = (W_miss.dot(zz_tot[n]).
+                                                dot(W_miss.T) +
+                                                sigma_sq*np.eye(n_miss))
                 xx_tot[n] = xx
 
             x_list.append(x_tot)
@@ -1169,18 +1170,13 @@ class MPPCA_Miss(MPPCA):
             zz_list.append(zz_tot)
             xz_list.append(xz_tot)
 
-#        x = sum([x*r[:,np.newaxis] for x,r in zip(x_list, responsibilities.T)])
-#        xx = sum([xx*r[:,np.newaxis,np.newaxis] for xx,r in zip(xx_list, responsibilities.T)])
-
         # Store sufficient statistics in dictionary
-        ss = {
-            'responsibilities' : responsibilities,
-            'x_list' : x_list,
-            'xx_list' : xx_list,
-            'xz_list' : xz_list,
-            'z_list' : z_list,
-            'zz_list' : zz_list
-             }
+        ss = {'responsibilities': responsibilities,
+              'x_list': x_list,
+              'xx_list': xx_list,
+              'xz_list': xz_list,
+              'z_list': z_list,
+              'zz_list': zz_list}
 
         # Compute log-likelihood
         sample_ll = np.log(r_sum)
@@ -1188,14 +1184,13 @@ class MPPCA_Miss(MPPCA):
         return ss, sample_ll
 
 
-
 class MFA(GMM):
 
     def __init__(self, n_components, latent_dim, tol=1e-3, max_iter=1000,
-                  random_state=0, verbose=True):
+                 random_state=0, verbose=True):
 
-        super(MFA,self).__init__(n_components, tol=1e-3, max_iter=1000,
-            random_state=0, verbose=True)
+        super(MFA, self).__init__(n_components, tol=1e-3, max_iter=1000,
+                                  random_state=0, verbose=True)
         self.latent_dim = latent_dim
 
     def _init_params(self, init_method, X=None):
@@ -1208,18 +1203,17 @@ class MFA(GMM):
             W_list = []
             Psi_list = []
             for k in range(self.n_components):
-                data_k = X[kmeans.labels_==k,:]
+                data_k = X[kmeans.labels_ == k, :]
                 fa = FactorAnalysis(n_components=self.latent_dim)
                 fa.fit(data_k)
                 W_list.append(fa.components_.T)
                 Psi_list.append(np.diag(fa.noise_variance_))
-            components = np.array([np.sum(kmeans.labels_==k) / n_examples for k in range(self.n_components)])
-            params_init = {
-                            'mu_list' : mu_list,
-                            'W_list' : W_list,
-                            'Psi_list' : Psi_list,
-                            'components' : components
-                            }
+            components = np.array([np.sum(kmeans.labels_ == k) / n_examples
+                                   for k in range(self.n_components)])
+            params_init = {'mu_list': mu_list,
+                           'W_list': W_list,
+                           'Psi_list': Psi_list,
+                           'components': components}
             return params_init
 
     def _e_step(self, X, params):
@@ -1264,10 +1258,10 @@ class MFA(GMM):
         # Compute responsibilities
         r = np.zeros([n_examples, self.n_components])
         for k, mu, Sigma in zip(range(self.n_components), mu_list, Sigma_list):
-            r[:,k] = multivariate_normal.pdf(X, mu, Sigma)
+            r[:, k] = multivariate_normal.pdf(X, mu, Sigma)
         r = r * components
         r_sum = r.sum(axis=1)
-        responsibilities = r / r_sum[:,np.newaxis]
+        responsibilities = r / r_sum[:, np.newaxis]
 
         # Get sufficient statistics E[z] and E[zz^t] for each component
         z_list = []
@@ -1280,28 +1274,25 @@ class MFA(GMM):
             F_inv = np.linalg.inv(W.dot(W.T) + Psi)
             z = dev.dot(F_inv.dot(W))
             z_list.append(z)
-            zz = (np.eye(self.latent_dim) - W.T.dot(F_inv).dot(W)
-                  + z[:,:,np.newaxis] * z[:,np.newaxis,:])
+            zz = (np.eye(self.latent_dim) - W.T.dot(F_inv).dot(W) +
+                  z[:, :, np.newaxis] * z[:, np.newaxis, :])
             zz_list.append(zz)
-            xx = dev[:,:,np.newaxis] * dev[:,np.newaxis,:]
+            xx = dev[:, :, np.newaxis] * dev[:, np.newaxis, :]
             xx_list.append(xx)
-            xz = dev[:,:,np.newaxis] * z[:,np.newaxis,:]
+            xz = dev[:, :, np.newaxis] * z[:, np.newaxis, :]
             xz_list.append(xz)
-            zx = z[:,:,np.newaxis] * dev[:,np.newaxis,:]
+            zx = z[:, :, np.newaxis] * dev[:, np.newaxis, :]
             zx_list.append(zx)
-
         x_list = [X for k in range(self.n_components)]
 
         # Store sufficient statistics in dictionary
-        ss = {
-            'responsibilities' : responsibilities,
-            'x_list' : x_list,
-            'xx_list' : xx_list,
-            'xz_list' : xz_list,
-            'zx_list' : zx_list,
-            'z_list' : z_list,
-            'zz_list' : zz_list
-             }
+        ss = {'responsibilities': responsibilities,
+              'x_list': x_list,
+              'xx_list': xx_list,
+              'xz_list': xz_list,
+              'zx_list': zx_list,
+              'z_list': z_list,
+              'zz_list': zz_list}
 
         # Compute log-likelihood
         sample_ll = np.log(r_sum)
@@ -1345,29 +1336,27 @@ class MFA(GMM):
                                               z_list, zz_list):
             # mu
             resid = x - z.dot(W.T)
-            mu = np.sum(resid*r[:,np.newaxis], axis=0) / r.sum()
+            mu = np.sum(resid*r[:, np.newaxis], axis=0) / r.sum()
             mu_list.append(mu)
 
-            #W
-            W1 = np.sum(xz*r[:,np.newaxis,np.newaxis], axis=0)
-            W2 = np.linalg.inv(np.sum(zz*r[:,np.newaxis,np.newaxis], axis=0))
+            # W
+            W1 = np.sum(xz*r[:, np.newaxis, np.newaxis], axis=0)
+            W2 = np.linalg.inv(np.sum(zz*r[:, np.newaxis, np.newaxis], axis=0))
             W = W1.dot(W2)
             W_list.append(W)
 
             # Psi
-            s1 = xx*r[:,np.newaxis,np.newaxis]
-            s2 = W[np.newaxis,:,:].dot(zx*r[:,np.newaxis,np.newaxis])[0,:,:,:].transpose((1,0,2))
+            s1 = xx*r[:, np.newaxis, np.newaxis]
+            s2 = (W[np.newaxis, :, :].dot(zx*r[:, np.newaxis, np.newaxis])
+                  [0, :, :, :].transpose((1, 0, 2)))
             Psi = np.diag(np.diag(np.sum(s1-s2, axis=0))) / r.sum()
             Psi_list.append(Psi)
 
         # Store params in dictionary
-        params = {
-            'W_list' : W_list,
-            'Psi_list' : Psi_list,
-            'mu_list' : mu_list,
-            'components' : components
-             }
-
+        params = {'W_list': W_list,
+                  'Psi_list': Psi_list,
+                  'mu_list': mu_list,
+                  'components': components}
         return params
 
     def _params_to_Sigma(self, params):
@@ -1401,8 +1390,8 @@ class MFA_Miss(MFA):
     and sigma_sq_k for each component k, and component probabilities alpha_k
     for each component.
 
-    MPPCA performs maximum likelihood or MAP estimation of the model parameters using
-    the expectation-maximisation algorithm (EM algorithm).
+    MPPCA performs maximum likelihood or MAP estimation of the model
+    parameters using the expectation-maximisation algorithm (EM algorithm).
 
     Attributes
     ----------
@@ -1451,18 +1440,17 @@ class MFA_Miss(MFA):
             W_list = []
             Psi_list = []
             for k in range(self.n_components):
-                data_k = X[kmeans.labels_==k,:]
+                data_k = X[kmeans.labels_ == k, :]
                 fa = FactorAnalysis(n_components=self.latent_dim)
                 fa.fit(data_k)
                 W_list.append(fa.components_.T)
                 Psi_list.append(np.diag(fa.noise_variance_))
-            components = np.array([np.sum(kmeans.labels_==k) / n_examples for k in range(self.n_components)])
-            params_init = {
-                            'mu_list' : mu_list,
-                            'W_list' : W_list,
-                            'Psi_list' : Psi_list,
-                            'components' : components
-                            }
+            components = np.array([np.sum(kmeans.labels_ == k) / n_examples
+                                   for k in range(self.n_components)])
+            params_init = {'mu_list': mu_list,
+                           'W_list': W_list,
+                           'Psi_list': Psi_list,
+                           'components': components}
             return params_init
 
     def _e_step(self, X, params):
@@ -1503,7 +1491,8 @@ class MFA_Miss(MFA):
         # Get Sigma from params
         Sigma_list = self._params_to_Sigma(params)
 
-        observed_list = [np.array(np.where(~np.isnan(row))).flatten() for row in X]
+        observed_list = [np.array(np.where(~np.isnan(row))).flatten() for
+                         row in X]
         n_examples, data_dim = np.shape(X)
 
         r = np.zeros([n_examples, self.n_components])
@@ -1511,15 +1500,17 @@ class MFA_Miss(MFA):
         # Loop over data points computing responsibilities
         for n in range(n_examples):
             id_obs = observed_list[n]
-            row = X[n,:]
+            row = X[n, :]
             row_obs = row[id_obs]
-            for k, mu, Sigma in zip(range(self.n_components), mu_list, Sigma_list):
+            for k, mu, Sigma in zip(range(self.n_components), mu_list,
+                                    Sigma_list):
                 mu_obs = mu[id_obs]
-                Sigma_obs = Sigma[np.ix_(id_obs,id_obs)]
-                r[n,k] = multivariate_normal.pdf(row_obs[np.newaxis,:], mu_obs, Sigma_obs)
+                Sigma_obs = Sigma[np.ix_(id_obs, id_obs)]
+                r[n, k] = multivariate_normal.pdf(row_obs[np.newaxis, :],
+                                                  mu_obs, Sigma_obs)
         r = r * components
         r_sum = r.sum(axis=1)
-        responsibilities = r / r_sum[:,np.newaxis]
+        responsibilities = r / r_sum[:, np.newaxis]
 
         x_list = []
         xx_list = []
@@ -1527,9 +1518,8 @@ class MFA_Miss(MFA):
         zz_list = []
         xz_list = []
         zx_list = []
-
         for k, mu, W, Psi in zip(range(self.n_components), mu_list, W_list,
-                                      Psi_list):
+                                 Psi_list):
             Psi_inv = np.linalg.inv(Psi)
             x_tot = np.zeros([n_examples, data_dim])
             xx_tot = np.zeros([n_examples, data_dim, data_dim])
@@ -1542,7 +1532,7 @@ class MFA_Miss(MFA):
                 id_obs = observed_list[n]
                 id_miss = np.setdiff1d(np.arange(data_dim), id_obs)
 #                n_miss = len(id_miss)
-                row = X[n,:]
+                row = X[n, :]
                 row_obs = row[id_obs]
 
 #                # Simplify for case with no missing data
@@ -1552,46 +1542,47 @@ class MFA_Miss(MFA):
 
                 # Get missing and visible points
 #                Psi_obs = Psi[np.ix_(id_obs,id_obs)]
-                Psi_miss = Psi[np.ix_(id_miss,id_miss)]
-                Psi_inv_obs = Psi_inv[np.ix_(id_obs,id_obs)]
-                W_obs = W[id_obs,:]
-                W_miss = W[id_miss,:]
+                Psi_miss = Psi[np.ix_(id_miss, id_miss)]
+                Psi_inv_obs = Psi_inv[np.ix_(id_obs, id_obs)]
+                W_obs = W[id_obs, :]
+                W_miss = W[id_miss, :]
                 mu_obs = mu[id_obs]
                 mu_miss = mu[id_miss]
                 row_min_mu = row_obs - mu_obs
 
                 # Get conditional distribution of p(z | x_vis, params)
-                Beta = W_obs.T.dot(Psi_inv_obs - Psi_inv_obs.dot(W_obs).dot(
-                        np.linalg.inv(np.eye(self.latent_dim) + W_obs.T.dot(Psi_inv_obs).dot(W_obs)).dot(
-                        W_obs.T.dot(Psi_inv_obs))))
+                Beta = (W_obs.T.dot(Psi_inv_obs - Psi_inv_obs.dot(W_obs).dot(
+                        np.linalg.inv(np.eye(self.latent_dim) +
+                        W_obs.T.dot(Psi_inv_obs).dot(W_obs)).dot(
+                        W_obs.T.dot(Psi_inv_obs)))))
                 mean_z_cond = Beta.dot(row_min_mu)
                 cov_z_cond = np.eye(self.latent_dim) - Beta.dot(W_obs)
-#                cov_z_cond = np.linalg.inv(W_obs.T.dot(Psi_obs).dot(W_obs) + np.eye(self.latent_dim))
-#                mean_z_cond = W_obs.T.dot(np.linalg.inv(W_obs.dot(W_obs.T) + Psi_obs)).dot(row_min_mu)
 
                 # Get conditional distribution of p(x_miss | z, params)
                 mean_x_miss = W_miss.dot(mean_z_cond) + mu_miss
 
                 # Append sufficient statistics
                 z_tot[n] = mean_z_cond
-                zz_tot[n] = cov_z_cond + np.outer(mean_z_cond,mean_z_cond)
+                zz_tot[n] = cov_z_cond + np.outer(mean_z_cond, mean_z_cond)
 
-                x_tot[n,id_obs] = row_obs
-                x_tot[n,id_miss] = mean_x_miss
+                x_tot[n, id_obs] = row_obs
+                x_tot[n, id_miss] = mean_x_miss
 
-                xz_tot[n,id_miss,:] = W_miss.dot(zz_tot[n])
-                xz_tot[n,id_obs,:] = np.outer(row_min_mu, mean_z_cond)
+                xz_tot[n, id_miss, :] = W_miss.dot(zz_tot[n])
+                xz_tot[n, id_obs, :] = np.outer(row_min_mu, mean_z_cond)
 
-                zx_tot[n,:,id_miss] = zz_tot[n].dot(W_miss.T).T
-                zx_tot[n,:,id_obs] = np.outer(mean_z_cond, row_min_mu).T
+                zx_tot[n, :, id_miss] = zz_tot[n].dot(W_miss.T).T
+                zx_tot[n, :, id_obs] = np.outer(mean_z_cond, row_min_mu).T
 
                 xx = np.empty([data_dim, data_dim])
-                xx[np.ix_(id_obs,id_obs)] = np.outer(row_min_mu, row_min_mu)
-                xx[np.ix_(id_obs,id_miss)] = np.outer(row_min_mu, mean_x_miss - mu_miss)
-                xx[np.ix_(id_miss,id_obs)] = np.outer(mean_x_miss - mu_miss, row_min_mu)
-                xx[np.ix_(id_miss,id_miss)] = W_miss.dot(zz_tot[n]).dot(W_miss.T) + Psi_miss
+                xx[np.ix_(id_obs, id_obs)] = np.outer(row_min_mu, row_min_mu)
+                xx[np.ix_(id_obs, id_miss)] = np.outer(row_min_mu,
+                                                       mean_x_miss - mu_miss)
+                xx[np.ix_(id_miss, id_obs)] = np.outer(mean_x_miss - mu_miss,
+                                                       row_min_mu)
+                xx[np.ix_(id_miss, id_miss)] = (W_miss.dot(zz_tot[n]).dot(
+                                                W_miss.T) + Psi_miss)
                 xx_tot[n] = xx
-
             x_list.append(x_tot)
             xx_list.append(xx_tot)
             z_list.append(z_tot)
@@ -1599,19 +1590,14 @@ class MFA_Miss(MFA):
             xz_list.append(xz_tot)
             zx_list.append(zx_tot)
 
-#        x = sum([x*r[:,np.newaxis] for x,r in zip(x_list, responsibilities.T)])
-#        xx = sum([xx*r[:,np.newaxis,np.newaxis] for xx,r in zip(xx_list, responsibilities.T)])
-
         # Store sufficient statistics in dictionary
-        ss = {
-            'responsibilities' : responsibilities,
-            'x_list' : x_list,
-            'xx_list' : xx_list,
-            'xz_list' : xz_list,
-            'zx_list' : zx_list,
-            'z_list' : z_list,
-            'zz_list' : zz_list
-             }
+        ss = {'responsibilities': responsibilities,
+              'x_list': x_list,
+              'xx_list': xx_list,
+              'xz_list': xz_list,
+              'zx_list': zx_list,
+              'z_list': z_list,
+              'zz_list': zz_list}
 
         # Compute log-likelihood
         sample_ll = np.log(r_sum)
