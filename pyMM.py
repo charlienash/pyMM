@@ -83,16 +83,24 @@ class GMM():
 
     TODO
     """
-    def __init__(self, n_components, tol=1e-3, max_iter=1000, random_state=0,
-                 verbose=True):
+    def __init__(self, n_components, covariance_type='full', tol=1e-3,
+                 max_iter=1000, random_state=0, verbose=True, robust=False):
+        self.n_components = n_components
+        self.covariance_type = covariance_type
         self.tol = tol
         self.max_iter = max_iter
         self.random_state = random_state
-        self.isFitted = False
         self.verbose = verbose
-        self.n_components = n_components
+        self.robust = robust
+        self.isFitted = False
 
     def _e_step(self, X, params):
+        if self.missing_data:
+            return self._e_step_miss(X, params)
+        else:
+            return self._e_step_no_miss(X, params)
+
+    def _e_step_no_miss(self, X, params):
         """ E-Step of the EM-algorithm.
 
         The E-step takes the existing parameters, for the components, bias
@@ -132,8 +140,21 @@ class GMM():
         # Get Sigma from params
         Sigma_list = self._params_to_Sigma(params)
 
-        for k, mu, Sigma in zip(range(self.n_components), mu_list, Sigma_list):
-            log_r[:, k] = multivariate_normal.logpdf(X, mu, Sigma)
+        for k, mu, Sigma in zip(range(self.n_components), mu_list,
+                                Sigma_list):
+            try:
+                log_r[:, k] = multivariate_normal.logpdf(X, mu, Sigma)
+            except np.linalg.linalg.LinAlgError:
+                if self.robust:
+                    Sigma_robust = Sigma + 1e-8*np.eye(self.data_dim)
+                    log_r[:, k] = multivariate_normal.logpdf(X, mu,
+                                                             Sigma_robust)
+                else:
+                    error_msg = ('Covariance matrix ill-conditioned. Use ' +
+                                 'robust=True to pre-condition covariance ' +
+                                 'matrices or choose fewer mixture ' +
+                                 'components')
+                    raise np.linalg.linalg.LinAlgError(error_msg)
         log_r = log_r + np.log(components)
         log_r_sum = sp.misc.logsumexp(log_r, axis=1)
         responsibilities = np.exp(log_r - log_r_sum[:, np.newaxis])
@@ -152,203 +173,7 @@ class GMM():
 
         return ss, sample_ll
 
-    def _m_step(self, ss, params):
-        """ M-Step of the EM-algorithm.
-
-        The M-step takes the sufficient statistics computed in the E-step, and
-        maximizes the expected complete data log-likelihood with respect to the
-        parameters.
-
-        Args
-        ----
-        ss : dict
-
-        Returns
-        -------
-        params : dict
-
-        """
-        resp = ss['responsibilities']
-        x_list = ss['x_list']
-        xx_list = ss['xx_list']
-
-        # Update components param
-        components = np.mean(resp, axis=0)
-
-        # Update mean / Sigma params
-        mu_list = []
-        Sigma_list = []
-        for r, x, xx in zip(resp.T, x_list, xx_list):
-            mu = np.sum(x*r[:, np.newaxis], axis=0) / r.sum()
-            mu_list.append(mu)
-            Sigma = (np.sum((xx*r[:, np.newaxis, np.newaxis]), axis=0) /
-                     r.sum() - np.outer(mu, mu))
-            Sigma_list.append(Sigma)
-
-        # Store params in dictionary
-        params = {'Sigma_list': Sigma_list,
-                  'mu_list': mu_list,
-                  'components': components}
-
-        return params
-
-    def _params_to_Sigma(self, params):
-        return params['Sigma_list']
-
-    def _init_params(self, init_method, X=None):
-        seed(self.random_state)
-        n_examples = X.shape[0]
-        if init_method == 'kmeans':
-            kmeans = KMeans(self.n_components)
-            kmeans.fit(X)
-            mu_list = [k for k in kmeans.cluster_centers_]
-            Sigma_list = [np.cov(X[kmeans.labels_ == k, :].T) for k in
-                          range(self.n_components)]
-            components = np.array([np.sum(kmeans.labels_ == k) / n_examples
-                                  for k in range(self.n_components)])
-            params_init = {'mu_list': mu_list,
-                           'Sigma_list': Sigma_list,
-                           'components': components}
-            return params_init
-
-    def fit(self, X, params_init=None, init_method='kmeans'):
-        """ Fit the model using EM with data X.
-
-        Args
-        ----
-        X : array, [nExamples, nFeatures]
-            Matrix of training data, where nExamples is the number of
-            examples and nFeatures is the number of features.
-        """
-        n_examples, data_dim = np.shape(X)
-        self.data_dim = data_dim
-
-        if params_init is None:
-            params = self._init_params(init_method, X)
-        else:
-            params = params_init
-
-        # Check for missing values and remove if whole row is missing
-        X = X[~np.isnan(X).all(axis=1), :]
-
-        oldL = -np.inf
-        for i in range(self.max_iter):
-
-            # E-Step
-            ss, sample_ll = self._e_step(X, params)
-
-            # Evaluate likelihood
-            ll = sample_ll.mean()
-            if self.verbose:
-                print("Iter {:d}   NLL: {:.3f}   Change: {:.3f}".format(i,
-                      -ll, -(ll-oldL)), flush=True)
-
-            # Break if change in likelihood is small
-            if np.abs(ll - oldL) < self.tol:
-                break
-            oldL = ll
-
-            # M-step
-            params = self._m_step(ss, params)
-
-        else:
-            if self.verbose:
-                print("PPCA did not converge within the specified" +
-                      " tolerance. You might want to increase the number of" +
-                      " iterations.")
-
-        # Update Object attributes
-        self.params = params
-        self.trainNll = ll
-        self.isFitted = True
-
-    def sample(self, n_samples=1):
-        """Sample from fitted model.
-
-        Sample from fitted model by first sampling from latent space
-        (spherical Gaussian) then transforming into data space using learned
-        parameters. Noise can then be added optionally.
-
-        Parameters
-        ----------
-        nSamples : int
-            Number of samples to generate
-        noisy : bool
-            Option to add noise to samples (default = True)
-
-        Returns
-        -------
-        dataSamples : array [nSamples, dataDim]
-            Collection of samples in data space.
-        """
-        if not self.isFitted:
-            print("Model is not yet fitted. First use fit to learn the " +
-                  "model params.")
-        else:
-            components = self.params['components']
-            mu_list = self.params['mu_list']
-            Sigma_list = self._params_to_Sigma(self.params)
-            components_cumsum = np.cumsum(components)
-            samples = np.zeros([n_samples, self.data_dim])
-            for n in range(n_samples):
-                r = np.random.rand(1)
-                z = np.argmin(r > components_cumsum)
-                samples[n] = rd.multivariate_normal(mu_list[z], Sigma_list[z])
-            return samples
-
-    def score_samples(self, X):
-        if not self.isFitted:
-            print("Model is not yet fitted. First use fit to learn the " +
-                  "model params.")
-        else:
-            # Apply one step of E-step to get the sample log-likelihoods
-            return self._e_step(X, self.params)[1]
-
-    def score(self, X):
-        """Compute the average log-likelihood of data matrix X
-
-        Parameters
-        ----------
-        X: array, shape (n_samples, n_features)
-            The data
-
-        Returns
-        -------
-        meanLl: array, shape (n_samples,)
-            Log-likelihood of each sample under the current model
-        """
-        if not self.isFitted:
-            print("Model is not yet fitted. First use fit to learn the " +
-                  "model params.")
-        else:
-            # Apply one step of E-step to get the sample log-likelihoods
-            sample_ll = self.score_samples(X)
-
-            # Divide by number of examples to get average log likelihood
-            return sample_ll.mean()
-
-
-class GMM_Miss(GMM):
-
-    def _init_params(self, init_method, X):
-        seed(self.random_state)
-        n_examples = X.shape[0]
-        if init_method == 'kmeans':
-            kmeans = KMeans(self.n_components)
-            imputer = Imputer()
-            X = imputer.fit_transform(X)
-            kmeans.fit(X)
-            mu_list = [k for k in kmeans.cluster_centers_]
-            Sigma_list = [np.cov(X[kmeans.labels_ == k, :].T) for k in
-                          range(self.n_components)]
-            components = np.array([np.sum(kmeans.labels_ == k) / n_examples
-                                   for k in range(self.n_components)])
-            params_init = {'mu_list': mu_list,
-                           'Sigma_list': Sigma_list,
-                           'components': components}
-            return params_init
-
-    def _e_step(self, X, params):
+    def _e_step_miss(self, X, params):
         """ E-Step of the EM-algorithm.
 
         The E-step takes the existing parameters, for the components, bias
@@ -464,259 +289,226 @@ class GMM_Miss(GMM):
 
         return ss, sample_ll
 
+    def _m_step(self, ss, params):
+        """ M-Step of the EM-algorithm.
+
+        The M-step takes the sufficient statistics computed in the E-step, and
+        maximizes the expected complete data log-likelihood with respect to the
+        parameters.
+
+        Args
+        ----
+        ss : dict
+
+        Returns
+        -------
+        params : dict
+
+        """
+        resp = ss['responsibilities']
+        x_list = ss['x_list']
+        xx_list = ss['xx_list']
+
+        # Update components param
+        components = np.mean(resp, axis=0)
+
+        # Update mean / Sigma params
+        mu_list = []
+        Sigma_list = []
+        for r, x, xx in zip(resp.T, x_list, xx_list):
+            mu = np.sum(x*r[:, np.newaxis], axis=0) / r.sum()
+            mu_list.append(mu)
+            Sigma = (np.sum((xx*r[:, np.newaxis, np.newaxis]), axis=0) /
+                     r.sum() - np.outer(mu, mu))
+            Sigma_list.append(Sigma)
+
+        # Store params in dictionary
+        params = {'Sigma_list': Sigma_list,
+                  'mu_list': mu_list,
+                  'components': components}
+
+        return params
+
+    def _params_to_Sigma(self, params):
+        return params['Sigma_list']
+
+    def _init_params(self, X, init_method='kmeans'):
+        seed(self.random_state)
+        n_examples = X.shape[0]
+        if init_method == 'kmeans':
+            kmeans = KMeans(self.n_components)
+            if self.missing_data:
+                imputer = Imputer()
+                X = imputer.fit_transform(X)
+            kmeans.fit(X)
+            mu_list = [k for k in kmeans.cluster_centers_]
+            Sigma_list = []
+            for k in range(self.n_components):
+                X_k = X[kmeans.labels_ == k, :]
+                if X_k.shape[0] < 5*self.data_dim:
+                    Sigma_list.append(np.eye(self.data_dim))
+                else:
+                    Sigma_list.append(np.cov(X_k.T))
+            components = np.array([np.sum(kmeans.labels_ == k) / n_examples
+                                  for k in range(self.n_components)])
+            params_init = {'mu_list': mu_list,
+                           'Sigma_list': Sigma_list,
+                           'components': components}
+            return params_init
+
+    def fit(self, X, params_init=None, init_method='kmeans'):
+        """ Fit the model using EM with data X.
+
+        Args
+        ----
+        X : array, [nExamples, nFeatures]
+            Matrix of training data, where nExamples is the number of
+            examples and nFeatures is the number of features.
+        """
+        n_examples, data_dim = np.shape(X)
+        self.data_dim = data_dim
+        if np.isnan(X).any():
+            self.missing_data = True
+        else:
+            self.missing_data = False
+
+        if params_init is None:
+            params = self._init_params(X, init_method)
+        else:
+            params = params_init
+
+        # Check for missing values and remove if whole row is missing
+        X = X[~np.isnan(X).all(axis=1), :]
+
+        oldL = -np.inf
+        for i in range(self.max_iter):
+
+            # E-Step
+            ss, sample_ll = self._e_step(X, params)
+
+            # Evaluate likelihood
+            ll = sample_ll.mean()
+            if self.verbose:
+                print("Iter {:d}   NLL: {:.3f}   Change: {:.3f}".format(i,
+                      -ll, -(ll-oldL)), flush=True)
+
+            # Break if change in likelihood is small
+            if np.abs(ll - oldL) < self.tol:
+                break
+            oldL = ll
+
+            # M-step
+            params = self._m_step(ss, params)
+
+        else:
+            if self.verbose:
+                print("PPCA did not converge within the specified" +
+                      " tolerance. You might want to increase the number of" +
+                      " iterations.")
+
+        # Update Object attributes
+        self.params = params
+        self.trainNll = ll
+        self.isFitted = True
+
+    def sample(self, n_samples=1):
+        """Sample from fitted model.
+
+        Sample from fitted model by first sampling from latent space
+        (spherical Gaussian) then transforming into data space using learned
+        parameters. Noise can then be added optionally.
+
+        Parameters
+        ----------
+        nSamples : int
+            Number of samples to generate
+        noisy : bool
+            Option to add noise to samples (default = True)
+
+        Returns
+        -------
+        dataSamples : array [nSamples, dataDim]
+            Collection of samples in data space.
+        """
+        if not self.isFitted:
+            print("Model is not yet fitted. First use fit to learn the " +
+                  "model params.")
+        else:
+            components = self.params['components']
+            mu_list = self.params['mu_list']
+            Sigma_list = self._params_to_Sigma(self.params)
+            components_cumsum = np.cumsum(components)
+            samples = np.zeros([n_samples, self.data_dim])
+            for n in range(n_samples):
+                r = np.random.rand(1)
+                z = np.argmin(r > components_cumsum)
+                samples[n] = rd.multivariate_normal(mu_list[z], Sigma_list[z])
+            return samples
+
+    def score_samples(self, X):
+        if not self.isFitted:
+            print("Model is not yet fitted. First use fit to learn the " +
+                  "model params.")
+        else:
+            # Apply one step of E-step to get the sample log-likelihoods
+            return self._e_step(X, self.params)[1]
+
+    def score(self, X):
+        """Compute the average log-likelihood of data matrix X
+
+        Parameters
+        ----------
+        X: array, shape (n_samples, n_features)
+            The data
+
+        Returns
+        -------
+        meanLl: array, shape (n_samples,)
+            Log-likelihood of each sample under the current model
+        """
+        if not self.isFitted:
+            print("Model is not yet fitted. First use fit to learn the " +
+                  "model params.")
+        else:
+            # Apply one step of E-step to get the sample log-likelihoods
+            sample_ll = self.score_samples(X)
+
+            # Divide by number of examples to get average log likelihood
+            return sample_ll.mean()
+
 
 class SphericalGMM(GMM):
 
-    def _init_params(self, init_method, X=None):
-        seed(self.random_state)
-        n_examples = X.shape[0]
-        if init_method == 'kmeans':
-            kmeans = KMeans(self.n_components)
-            kmeans.fit(X)
-            mu_list = [k for k in kmeans.cluster_centers_]
-            sigma_sq_list = [np.mean(np.diag(
-                             np.cov(X[kmeans.labels_ == k, :].T))) for k in
-                             range(self.n_components)]
-            components = np.array([np.sum(kmeans.labels_ == k) / n_examples
-                                   for k in range(self.n_components)])
-            params_init = {'mu_list': mu_list,
-                           'sigma_sq_list': sigma_sq_list,
-                           'components': components}
-            return params_init
+    @staticmethod
+    def _convert_gmm_params(params):
+        sigma_sq_list = [np.mean(np.diag(cov)) for cov in
+                         params['Sigma_list']]
+        params_conv = {i: params[i] for i in params if i != 'Sigma_list'}
+        params_conv['sigma_sq_list'] = sigma_sq_list
+        return params_conv
+
+    def _init_params(self, X, init_method='kmeans'):
+        params_init_gmm = super(SphericalGMM, self)._init_params(X,
+                                                                 init_method)
+        return self._convert_gmm_params(params_init_gmm)
 
     def _m_step(self, ss, params):
-        """ M-Step of the EM-algorithm.
-
-        The M-step takes the sufficient statistics computed in the E-step, and
-        maximizes the expected complete data log-likelihood with respect to the
-        parameters.
-
-        Args
-        ----
-        ss : dict
-
-        Returns
-        -------
-        params : dict
-
-        """
-        resp = ss['responsibilities']
-        x_list = ss['x_list']
-        xx_list = ss['xx_list']
-
-        # Update components param
-        components = np.mean(resp, axis=0)
-
-        # Update mean / Sigma params
-        mu_list = []
-        sigma_sq_list = []
-        for r, x, xx in zip(resp.T, x_list, xx_list):
-            mu = np.sum(x*r[:, np.newaxis], axis=0) / r.sum()
-            mu_list.append(mu)
-            Sigma = (np.sum((xx*r[:, np.newaxis, np.newaxis]), axis=0) /
-                     r.sum() - np.outer(mu, mu))
-            sigma_sq = np.mean(np.diag(Sigma))
-            sigma_sq_list.append(sigma_sq)
-
-        # Store params in dictionary
-        params = {'sigma_sq_list': sigma_sq_list,
-                  'mu_list': mu_list,
-                  'components': components}
-        return params
+        params_gmm = super(SphericalGMM, self)._m_step(ss, params)
+        return self._convert_gmm_params(params_gmm)
 
     def _params_to_Sigma(self, params):
             return [sigma_sq*np.eye(self.data_dim) for sigma_sq in
                     params['sigma_sq_list']]
 
 
-class SphericalGMM_Miss(GMM_Miss):
+class DiagonalGMM(SphericalGMM):
 
-    def _init_params(self, init_method, X=None):
-        seed(self.random_state)
-        n_examples = X.shape[0]
-        if init_method == 'kmeans':
-            kmeans = KMeans(self.n_components)
-            imputer = Imputer()
-            X = imputer.fit_transform(X)
-            kmeans.fit(X)
-            mu_list = [k for k in kmeans.cluster_centers_]
-            sigma_sq_list = [np.mean(np.diag(
-                             np.cov(X[kmeans.labels_ == k, :].T))) for k in
-                             range(self.n_components)]
-            components = np.array([np.sum(kmeans.labels_ == k) / n_examples
-                                   for k in range(self.n_components)])
-            params_init = {'mu_list': mu_list,
-                           'sigma_sq_list': sigma_sq_list,
-                           'components': components}
-            return params_init
-
-    def _m_step(self, ss, params):
-        """ M-Step of the EM-algorithm.
-
-        The M-step takes the sufficient statistics computed in the E-step, and
-        maximizes the expected complete data log-likelihood with respect to the
-        parameters.
-
-        Args
-        ----
-        ss : dict
-
-        Returns
-        -------
-        params : dict
-
-        """
-        resp = ss['responsibilities']
-        x_list = ss['x_list']
-        xx_list = ss['xx_list']
-
-        # Update components param
-        components = np.mean(resp, axis=0)
-
-        # Update mean / Sigma params
-        mu_list = []
-        sigma_sq_list = []
-        for r, x, xx in zip(resp.T, x_list, xx_list):
-            mu = np.sum(x*r[:, np.newaxis], axis=0) / r.sum()
-            mu_list.append(mu)
-            Sigma = (np.sum((xx*r[:, np.newaxis, np.newaxis]), axis=0) /
-                     r.sum() - np.outer(mu, mu))
-            sigma_sq = np.mean(np.diag(Sigma))
-            sigma_sq_list.append(sigma_sq)
-
-        # Store params in dictionary
-        params = {'sigma_sq_list': sigma_sq_list,
-                  'mu_list': mu_list,
-                  'components': components}
-        return params
-
-    def _params_to_Sigma(self, params):
-            return [sigma_sq*np.eye(self.data_dim) for sigma_sq in
-                    params['sigma_sq_list']]
-
-
-class DiagonalGMM(GMM):
-
-    def _init_params(self, init_method, X=None):
-        seed(self.random_state)
-        n_examples = X.shape[0]
-        if init_method == 'kmeans':
-            kmeans = KMeans(self.n_components)
-            kmeans.fit(X)
-            mu_list = [k for k in kmeans.cluster_centers_]
-            Psi_list = [np.diag(np.diag(np.cov(X[kmeans.labels_ == k, :].T)))
-                        for k in range(self.n_components)]
-            components = np.array([np.sum(kmeans.labels_ == k) / n_examples
-                                   for k in range(self.n_components)])
-            params_init = {'mu_list': mu_list,
-                           'Psi_list': Psi_list,
-                           'components': components}
-            return params_init
-
-    def _m_step(self, ss, params):
-        """ M-Step of the EM-algorithm.
-
-        The M-step takes the sufficient statistics computed in the E-step, and
-        maximizes the expected complete data log-likelihood with respect to the
-        parameters.
-
-        Args
-        ----
-        ss : dict
-
-        Returns
-        -------
-        params : dict
-
-        """
-        resp = ss['responsibilities']
-        x_list = ss['x_list']
-        xx_list = ss['xx_list']
-
-        # Update components param
-        components = np.mean(resp, axis=0)
-
-        # Update mean / Sigma params
-        mu_list = []
-        Psi_list = []
-        for r, x, xx in zip(resp.T, x_list, xx_list):
-            mu = np.sum(x*r[:, np.newaxis], axis=0) / r.sum()
-            mu_list.append(mu)
-            Sigma = (np.sum((xx*r[:, np.newaxis, np.newaxis]), axis=0) /
-                     r.sum() - np.outer(mu, mu))
-            Psi = np.diag(np.diag(Sigma))
-            Psi_list.append(Psi)
-
-        # Store params in dictionary
-        params = {'Psi_list': Psi_list,
-                  'mu_list': mu_list,
-                  'components': components}
-        return params
-
-    def _params_to_Sigma(self, params):
-            return params['Psi_list']
-
-
-class DiagonalGMM_Miss(GMM_Miss):
-
-    def _init_params(self, init_method, X=None):
-        seed(self.random_state)
-        n_examples = X.shape[0]
-        if init_method == 'kmeans':
-            kmeans = KMeans(self.n_components)
-            imputer = Imputer()
-            X = imputer.fit_transform(X)
-            kmeans.fit(X)
-            mu_list = [k for k in kmeans.cluster_centers_]
-            Psi_list = [np.diag(np.diag(np.cov(X[kmeans.labels_ == k, :].T)))
-                        for k in range(self.n_components)]
-            components = np.array([np.sum(kmeans.labels_ == k) / n_examples
-                                   for k in range(self.n_components)])
-            params_init = {'mu_list': mu_list,
-                           'Psi_list': Psi_list,
-                           'components': components}
-            return params_init
-
-    def _m_step(self, ss, params):
-        """ M-Step of the EM-algorithm.
-
-        The M-step takes the sufficient statistics computed in the E-step, and
-        maximizes the expected complete data log-likelihood with respect to the
-        parameters.
-
-        Args
-        ----
-        ss : dict
-
-        Returns
-        -------
-        params : dict
-
-        """
-        resp = ss['responsibilities']
-        x_list = ss['x_list']
-        xx_list = ss['xx_list']
-
-        # Update components param
-        components = np.mean(resp, axis=0)
-
-        # Update mean / Sigma params
-        mu_list = []
-        Psi_list = []
-        for r, x, xx in zip(resp.T, x_list, xx_list):
-            mu = np.sum(x*r[:, np.newaxis], axis=0) / r.sum()
-            mu_list.append(mu)
-            Sigma = (np.sum((xx*r[:, np.newaxis, np.newaxis]), axis=0) /
-                     r.sum() - np.outer(mu, mu))
-            Psi = np.diag(np.diag(Sigma))
-            Psi_list.append(Psi)
-
-        # Store params in dictionary
-        params = {'Psi_list': Psi_list,
-                  'mu_list': mu_list,
-                  'components': components}
-
-        return params
+    @staticmethod
+    def _convert_gmm_params(params):
+        Psi_list = [np.diag(np.diag(cov)) for cov in params['Sigma_list']]
+        params_conv = {i: params[i] for i in params if i != 'Sigma_list'}
+        params_conv['Psi_list'] = Psi_list
+        return params_conv
 
     def _params_to_Sigma(self, params):
             return params['Psi_list']
@@ -785,17 +577,22 @@ class MPPCA(GMM):
     """
 
     def __init__(self, n_components, latent_dim, tol=1e-3, max_iter=1000,
-                 random_state=0, verbose=True):
+                 random_state=0, verbose=True, robust=False):
 
-        super(MPPCA, self).__init__(n_components, tol, max_iter, random_state,
-                                    verbose)
+        super(MPPCA, self).__init__(n_components=n_components, tol=tol,
+                                    max_iter=max_iter,
+                                    random_state=random_state,
+                                    verbose=verbose, robust=robust)
         self.latent_dim = latent_dim
 
-    def _init_params(self, init_method, X=None):
+    def _init_params(self, X, init_method='kmeans'):
         seed(self.random_state)
         n_examples = X.shape[0]
         if init_method == 'kmeans':
             kmeans = KMeans(self.n_components)
+            if self.missing_data:
+                imputer = Imputer()
+                X = imputer.fit_transform(X)
             kmeans.fit(X)
             mu_list = [k for k in kmeans.cluster_centers_]
             W_list = []
@@ -814,7 +611,7 @@ class MPPCA(GMM):
                            'components': components}
             return params_init
 
-    def _e_step(self, X, params):
+    def _e_step_no_miss(self, X, params):
         """ E-Step of the EM-algorithm.
 
         The E-step takes the existing parameters, for the components, bias
@@ -893,156 +690,7 @@ class MPPCA(GMM):
 
         return ss, sample_ll
 
-    def _m_step(self, ss, params):
-        """ M-Step of the EM-algorithm.
-
-        The M-step takes the sufficient statistics computed in the E-step, and
-        maximizes the expected complete data log-likelihood with respect to the
-        parameters.
-
-        Args
-        ----
-        ss : dict
-
-        Returns
-        -------
-        params : dict
-
-        """
-        resp = ss['responsibilities']
-        x_list = ss['x_list']
-        z_list = ss['z_list']
-        zz_list = ss['zz_list']
-        xz_list = ss['xz_list']
-        xx_list = ss['xx_list']
-        W_list_old = params['W_list']
-
-        # Update components param
-        components = np.mean(resp, axis=0)
-
-        # Update mean / Sigma params
-        mu_list = []
-        W_list = []
-        sigma_sq_list = []
-        for r, W, x, z, zz, xz, xx in zip(resp.T, W_list_old, x_list, z_list,
-                                          zz_list, xz_list, xx_list):
-            resid = x - z.dot(W.T)
-            mu = np.sum(resid*r[:, np.newaxis], axis=0) / r.sum()
-            mu_list.append(mu)
-            W1 = np.sum(xz*r[:, np.newaxis, np.newaxis], axis=0)
-            W2 = np.linalg.inv(np.sum(zz*r[:, np.newaxis, np.newaxis],
-                                      axis=0))
-            W = W1.dot(W2)
-            W_list.append(W)
-            s1 = np.trace(xx, axis1=1, axis2=2)
-            s2 = -2*np.trace(xz.dot(W.T), axis1=1, axis2=2)
-            s3 = np.trace(zz*W.T.dot(W), axis1=1, axis2=2)
-            sigma_sq = np.sum(r*(s1 + s2 + s3)) / (self.data_dim * r.sum())
-            sigma_sq_list.append(sigma_sq)
-
-        # Store params in dictionary
-        params = {'W_list': W_list,
-                  'sigma_sq_list': sigma_sq_list,
-                  'mu_list': mu_list,
-                  'components': components}
-        return params
-
-    def _params_to_Sigma(self, params):
-        W_list = params['W_list']
-        sigma_sq_list = params['sigma_sq_list']
-        Sigma_list = [W.dot(W.T) + sigma_sq*np.eye(self.data_dim)
-                      for W, sigma_sq in zip(W_list, sigma_sq_list)]
-        return Sigma_list
-
-
-class MPPCA_Miss(MPPCA):
-    """Mixtures of probabilistic principal components analysis (PPCA) models.
-
-    A generative latent variable model.
-
-    PPCA assumes that the observed data is generated by first generating latent
-    variables z from a Gaussian distribution p(z), then linearly transforming
-    these variables with a weights matrix W, and then finally adding spherical
-    Gaussian noise. PPCA can be viewed as a Gaussian model with a low-rank
-    approximation to the covariance matrix. It can be useful in the case
-    where there are many dimensions, but not many examples. Here a
-    full-covariance model needs to estimate many parameters, and will have a
-    tendency to overfit, whereas a PPCA model can have considerably fewer
-    parameters, and therefore is less likely to overfit.
-
-    The parameters of the model are the transformation matrix W , the mean mu,
-    and the noise variance sigma_sq.
-
-    The mixture of PPCA models (MPPCA) additionally assumes that the data can
-    come from a number of PPCA components, with each component being selected
-    from a disrete probability distribution. Thus the parameters are W_k, mu_k
-    and sigma_sq_k for each component k, and component probabilities alpha_k
-    for each component.
-
-    MPPCA performs maximum likelihood or MAP estimation of the model
-    parameters using the expectation-maximisation algorithm (EM algorithm).
-
-    Attributes
-    ----------
-
-    latent_dim : int
-        Dimensionality of latent space. The number of variables that are
-        transformed by the weight matrix to the data space.
-
-    n_components : array, [latentDim, nFeatures]
-        Transformation matrix parameter.
-
-    bias: array, [nFeatures]
-        Bias parameter.
-
-    noiseVariance : float
-        Noise variance parameter. Variance of noise that is added to linearly
-        transformed latent variables to generate data.
-
-    standardize : bool, optional
-        When True, the mean is subtracted from the data, and each feature is
-        divided by it's standard deviation so that the mean and variance of
-        the transformed features are 0 and 1 respectively.
-
-    componentPrior : float >= 0
-        Gaussian component matrix hyperparameter. If > 0 then a Gaussian prior
-        is applied to each column of the component matrix with covariance
-        componentPrior^-1 * noiseVariance. This has the effect
-        of regularising the component matrix.
-
-    tol : float
-        Stopping tolerance for EM algorithm
-
-    maxIter : int
-        Maximum number of iterations for EM algorithm
-    """
-
-    def _init_params(self, init_method, X=None):
-        seed(self.random_state)
-        n_examples = X.shape[0]
-        if init_method == 'kmeans':
-            kmeans = KMeans(self.n_components)
-            imputer = Imputer()
-            X = imputer.fit_transform(X)
-            kmeans.fit(X)
-            mu_list = [k for k in kmeans.cluster_centers_]
-            W_list = []
-            sigma_sq_list = []
-            for k in range(self.n_components):
-                data_k = X[kmeans.labels_ == k, :]
-                pca = PCA(n_components=self.latent_dim)
-                pca.fit(data_k)
-                W_list.append(pca.components_.T)
-                sigma_sq_list.append(0.1)
-            components = np.array([np.sum(kmeans.labels_ == k) / n_examples
-                                   for k in range(self.n_components)])
-            params_init = {'mu_list': mu_list,
-                           'W_list': W_list,
-                           'sigma_sq_list': sigma_sq_list,
-                           'components': components}
-            return params_init
-
-    def _e_step(self, X, params):
+    def _e_step_miss(self, X, params):
         """ E-Step of the EM-algorithm.
 
         The E-step takes the existing parameters, for the components, bias
@@ -1183,21 +831,87 @@ class MPPCA_Miss(MPPCA):
 
         return ss, sample_ll
 
+    def _m_step(self, ss, params):
+        """ M-Step of the EM-algorithm.
+
+        The M-step takes the sufficient statistics computed in the E-step, and
+        maximizes the expected complete data log-likelihood with respect to the
+        parameters.
+
+        Args
+        ----
+        ss : dict
+
+        Returns
+        -------
+        params : dict
+
+        """
+        resp = ss['responsibilities']
+        x_list = ss['x_list']
+        z_list = ss['z_list']
+        zz_list = ss['zz_list']
+        xz_list = ss['xz_list']
+        xx_list = ss['xx_list']
+        W_list_old = params['W_list']
+
+        # Update components param
+        components = np.mean(resp, axis=0)
+
+        # Update mean / Sigma params
+        mu_list = []
+        W_list = []
+        sigma_sq_list = []
+        for r, W, x, z, zz, xz, xx in zip(resp.T, W_list_old, x_list, z_list,
+                                          zz_list, xz_list, xx_list):
+            resid = x - z.dot(W.T)
+            mu = np.sum(resid*r[:, np.newaxis], axis=0) / r.sum()
+            mu_list.append(mu)
+            W1 = np.sum(xz*r[:, np.newaxis, np.newaxis], axis=0)
+            W2 = np.linalg.inv(np.sum(zz*r[:, np.newaxis, np.newaxis],
+                                      axis=0))
+            W = W1.dot(W2)
+            W_list.append(W)
+            s1 = np.trace(xx, axis1=1, axis2=2)
+            s2 = -2*np.trace(xz.dot(W.T), axis1=1, axis2=2)
+            s3 = np.trace(zz*W.T.dot(W), axis1=1, axis2=2)
+            sigma_sq = np.sum(r*(s1 + s2 + s3)) / (self.data_dim * r.sum())
+            sigma_sq_list.append(sigma_sq)
+
+        # Store params in dictionary
+        params = {'W_list': W_list,
+                  'sigma_sq_list': sigma_sq_list,
+                  'mu_list': mu_list,
+                  'components': components}
+        return params
+
+    def _params_to_Sigma(self, params):
+        W_list = params['W_list']
+        sigma_sq_list = params['sigma_sq_list']
+        Sigma_list = [W.dot(W.T) + sigma_sq*np.eye(self.data_dim)
+                      for W, sigma_sq in zip(W_list, sigma_sq_list)]
+        return Sigma_list
+
 
 class MFA(GMM):
 
     def __init__(self, n_components, latent_dim, tol=1e-3, max_iter=1000,
-                 random_state=0, verbose=True):
+                 random_state=0, verbose=True, robust=False):
 
-        super(MFA, self).__init__(n_components, tol=1e-3, max_iter=1000,
-                                  random_state=0, verbose=True)
+        super(MFA, self).__init__(n_components=n_components, tol=tol,
+                                    max_iter=max_iter,
+                                    random_state=random_state,
+                                    verbose=verbose, robust=robust)
         self.latent_dim = latent_dim
 
-    def _init_params(self, init_method, X=None):
+    def _init_params(self, X, init_method='kmeans'):
         seed(self.random_state)
         n_examples = X.shape[0]
         if init_method == 'kmeans':
             kmeans = KMeans(self.n_components)
+            if self.missing_data:
+                imputer = Imputer()
+                X = imputer.fit_transform(X)
             kmeans.fit(X)
             mu_list = [k for k in kmeans.cluster_centers_]
             W_list = []
@@ -1216,7 +930,7 @@ class MFA(GMM):
                            'components': components}
             return params_init
 
-    def _e_step(self, X, params):
+    def _e_step_no_miss(self, X, params):
         """ E-Step of the EM-algorithm.
 
         The E-step takes the existing parameters, for the components, bias
@@ -1299,161 +1013,7 @@ class MFA(GMM):
 
         return ss, sample_ll
 
-    def _m_step(self, ss, params):
-        """ M-Step of the EM-algorithm.
-
-        The M-step takes the sufficient statistics computed in the E-step, and
-        maximizes the expected complete data log-likelihood with respect to the
-        parameters.
-
-        Args
-        ----
-        ss : dict
-
-        Returns
-        -------
-        params : dict
-
-        """
-        resp = ss['responsibilities']
-        x_list = ss['x_list']
-        xx_list = ss['xx_list']
-        xz_list = ss['xz_list']
-        zx_list = ss['zx_list']
-        z_list = ss['z_list']
-        zz_list = ss['zz_list']
-        W_list_old = params['W_list']
-
-        # Update components param
-        components = np.mean(resp, axis=0)
-
-        # Update mean / Sigma params
-        mu_list = []
-        W_list = []
-        Psi_list = []
-        for r, W, x, xx, xz, zx, z, zz in zip(resp.T, W_list_old, x_list,
-                                              xx_list, xz_list, zx_list,
-                                              z_list, zz_list):
-            # mu
-            resid = x - z.dot(W.T)
-            mu = np.sum(resid*r[:, np.newaxis], axis=0) / r.sum()
-            mu_list.append(mu)
-
-            # W
-            W1 = np.sum(xz*r[:, np.newaxis, np.newaxis], axis=0)
-            W2 = np.linalg.inv(np.sum(zz*r[:, np.newaxis, np.newaxis], axis=0))
-            W = W1.dot(W2)
-            W_list.append(W)
-
-            # Psi
-            s1 = xx*r[:, np.newaxis, np.newaxis]
-            s2 = (W[np.newaxis, :, :].dot(zx*r[:, np.newaxis, np.newaxis])
-                  [0, :, :, :].transpose((1, 0, 2)))
-            Psi = np.diag(np.diag(np.sum(s1-s2, axis=0))) / r.sum()
-            Psi_list.append(Psi)
-
-        # Store params in dictionary
-        params = {'W_list': W_list,
-                  'Psi_list': Psi_list,
-                  'mu_list': mu_list,
-                  'components': components}
-        return params
-
-    def _params_to_Sigma(self, params):
-        W_list = params['W_list']
-        Psi_list = params['Psi_list']
-        Sigma_list = [W.dot(W.T) + Psi for W, Psi in zip(W_list, Psi_list)]
-        return Sigma_list
-
-
-class MFA_Miss(MFA):
-    """Mixtures of probabilistic principal components analysis (PPCA) models.
-
-    A generative latent variable model.
-
-    PPCA assumes that the observed data is generated by first generating latent
-    variables z from a Gaussian distribution p(z), then linearly transforming
-    these variables with a weights matrix W, and then finally adding spherical
-    Gaussian noise. PPCA can be viewed as a Gaussian model with a low-rank
-    approximation to the covariance matrix. It can be useful in the case
-    where there are many dimensions, but not many examples. Here a
-    full-covariance model needs to estimate many parameters, and will have a
-    tendency to overfit, whereas a PPCA model can have considerably fewer
-    parameters, and therefore is less likely to overfit.
-
-    The parameters of the model are the transformation matrix W , the mean mu,
-    and the noise variance sigma_sq.
-
-    The mixture of PPCA models (MPPCA) additionally assumes that the data can
-    come from a number of PPCA components, with each component being selected
-    from a disrete probability distribution. Thus the parameters are W_k, mu_k
-    and sigma_sq_k for each component k, and component probabilities alpha_k
-    for each component.
-
-    MPPCA performs maximum likelihood or MAP estimation of the model
-    parameters using the expectation-maximisation algorithm (EM algorithm).
-
-    Attributes
-    ----------
-
-    latent_dim : int
-        Dimensionality of latent space. The number of variables that are
-        transformed by the weight matrix to the data space.
-
-    n_components : array, [latentDim, nFeatures]
-        Transformation matrix parameter.
-
-    bias: array, [nFeatures]
-        Bias parameter.
-
-    noiseVariance : float
-        Noise variance parameter. Variance of noise that is added to linearly
-        transformed latent variables to generate data.
-
-    standardize : bool, optional
-        When True, the mean is subtracted from the data, and each feature is
-        divided by it's standard deviation so that the mean and variance of
-        the transformed features are 0 and 1 respectively.
-
-    componentPrior : float >= 0
-        Gaussian component matrix hyperparameter. If > 0 then a Gaussian prior
-        is applied to each column of the component matrix with covariance
-        componentPrior^-1 * noiseVariance. This has the effect
-        of regularising the component matrix.
-
-    tol : float
-        Stopping tolerance for EM algorithm
-
-    maxIter : int
-        Maximum number of iterations for EM algorithm
-    """
-
-    def _init_params(self, init_method, X=None):
-        seed(self.random_state)
-        n_examples = X.shape[0]
-        if init_method == 'kmeans':
-            kmeans = KMeans(self.n_components)
-            imputer = Imputer()
-            X = imputer.fit_transform(X)
-            kmeans.fit(X)
-            mu_list = [k for k in kmeans.cluster_centers_]
-            W_list = []
-            Psi_list = []
-            for k in range(self.n_components):
-                data_k = X[kmeans.labels_ == k, :]
-                fa = FactorAnalysis(n_components=self.latent_dim)
-                fa.fit(data_k)
-                W_list.append(fa.components_.T)
-                Psi_list.append(np.diag(fa.noise_variance_))
-            components = np.array([np.sum(kmeans.labels_ == k) / n_examples
-                                   for k in range(self.n_components)])
-            params_init = {'mu_list': mu_list,
-                           'W_list': W_list,
-                           'Psi_list': Psi_list,
-                           'components': components}
-            return params_init
-
-    def _e_step(self, X, params):
+    def _e_step_miss(self, X, params):
         """ E-Step of the EM-algorithm.
 
         The E-step takes the existing parameters, for the components, bias
@@ -1603,3 +1163,69 @@ class MFA_Miss(MFA):
         sample_ll = np.log(r_sum)
 
         return ss, sample_ll
+
+    def _m_step(self, ss, params):
+        """ M-Step of the EM-algorithm.
+
+        The M-step takes the sufficient statistics computed in the E-step, and
+        maximizes the expected complete data log-likelihood with respect to the
+        parameters.
+
+        Args
+        ----
+        ss : dict
+
+        Returns
+        -------
+        params : dict
+
+        """
+        resp = ss['responsibilities']
+        x_list = ss['x_list']
+        xx_list = ss['xx_list']
+        xz_list = ss['xz_list']
+        zx_list = ss['zx_list']
+        z_list = ss['z_list']
+        zz_list = ss['zz_list']
+        W_list_old = params['W_list']
+
+        # Update components param
+        components = np.mean(resp, axis=0)
+
+        # Update mean / Sigma params
+        mu_list = []
+        W_list = []
+        Psi_list = []
+        for r, W, x, xx, xz, zx, z, zz in zip(resp.T, W_list_old, x_list,
+                                              xx_list, xz_list, zx_list,
+                                              z_list, zz_list):
+            # mu
+            resid = x - z.dot(W.T)
+            mu = np.sum(resid*r[:, np.newaxis], axis=0) / r.sum()
+            mu_list.append(mu)
+
+            # W
+            W1 = np.sum(xz*r[:, np.newaxis, np.newaxis], axis=0)
+            W2 = np.linalg.inv(np.sum(zz*r[:, np.newaxis, np.newaxis], axis=0))
+            W = W1.dot(W2)
+            W_list.append(W)
+
+            # Psi
+            s1 = xx*r[:, np.newaxis, np.newaxis]
+            s2 = (W[np.newaxis, :, :].dot(zx*r[:, np.newaxis, np.newaxis])
+                  [0, :, :, :].transpose((1, 0, 2)))
+            Psi = np.diag(np.diag(np.sum(s1-s2, axis=0))) / r.sum()
+            Psi_list.append(Psi)
+
+        # Store params in dictionary
+        params = {'W_list': W_list,
+                  'Psi_list': Psi_list,
+                  'mu_list': mu_list,
+                  'components': components}
+        return params
+
+    def _params_to_Sigma(self, params):
+        W_list = params['W_list']
+        Psi_list = params['Psi_list']
+        Sigma_list = [W.dot(W.T) + Psi for W, Psi in zip(W_list, Psi_list)]
+        return Sigma_list

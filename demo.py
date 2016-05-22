@@ -1,13 +1,13 @@
 import numpy as np
-from pyMM import (GMM, SphericalGMM, DiagonalGMM, MPPCA, MFA, GMM_Miss,
-                  SphericalGMM_Miss, DiagonalGMM_Miss, MPPCA_Miss, MFA_Miss)
+from pyMM import (GMM, SphericalGMM, DiagonalGMM, MPPCA, MFA,
+                  MFA_Miss)
 from util import _generate_mixture_data, plot_density
 
 
 def main():
-    n_examples = 1500
+    n_examples = 700
     data_dim = 2
-    n_components = 12
+    n_components = 6
     X = _generate_mixture_data(data_dim, n_components, n_examples)
 
     # Obscure data
@@ -16,14 +16,11 @@ def main():
     X_miss[r > 0.7] = np.nan
 
     # Initialize model
-    gmm = GMM(n_components=n_components)
+#    gmm = GMM(n_components=8)
 #    gmm = SphericalGMM(n_components=n_components)
 #    gmm = DiagonalGMM(n_components=n_components)
-#    gmm = MPPCA(n_components=n_components, latent_dim=2)
-#    gmm = MFA(n_components=n_components, latent_dim=2)
-#    gmm = GMM_Miss(n_components=n_components)
-#    gmm = SphericalGMM_Miss(n_components=n_components)
-#    gmm = DiagonalGMM_Miss(n_components=n_components)
+#    gmm = MPPCA(n_components=n_components, latent_dim=1)
+    gmm = MFA(n_components=n_components, latent_dim=2)
 #    gmm = MPPCA_Miss(n_components=n_components, latent_dim=2)
 #    gmm = MFA_Miss(n_components=n_components, latent_dim=1)
 
