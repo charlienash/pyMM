@@ -896,14 +896,14 @@ class MPPCA(GMM):
 class MFA(GMM):
 
     def __init__(self, n_components, latent_dim, tol=1e-3, max_iter=1000,
-                 random_state=0, verbose=True, robust=False, small=1e-4):
+                 random_state=0, verbose=True, robust=False, SMALL=1e-4):
 
         super(MFA, self).__init__(n_components=n_components, tol=tol,
-                                    max_iter=max_iter,
-                                    random_state=random_state,
-                                    verbose=verbose, robust=robust)
+                                  max_iter=max_iter,
+                                  random_state=random_state,
+                                  verbose=verbose, robust=robust)
         self.latent_dim = latent_dim
-        self.SMALL = small
+        self.SMALL = SMALL
 
     def _init_params(self, X, init_method='kmeans'):
         seed(self.random_state)
@@ -919,10 +919,14 @@ class MFA(GMM):
             Psi_list = []
             for k in range(self.n_components):
                 X_k = X[kmeans.labels_ == k, :]
-                if X_k.shape[0] < 500*self.data_dim:
-                    W_list.append(np.random.randn(self.data_dim,
-                                                  self.latent_dim))
-                    Psi_list.append(10*np.eye(self.data_dim))
+                if 1 == X_k.shape[0]:
+                    W_list.append(1e-5 * np.random.randn(self.data_dim,
+                                                         self.latent_dim))
+                    Psi_list.append(0.1*np.eye(self.data_dim))
+                elif X_k.shape[0] < self.data_dim:
+                    W_list.append(1e-5 * np.random.randn(self.data_dim,
+                                                         self.latent_dim))
+                    Psi_list.append(np.diag(np.diag(np.cov(X_k.T))))
                 else:
                     fa = FactorAnalysis(n_components=self.latent_dim)
                     fa.fit(X_k)
@@ -930,6 +934,10 @@ class MFA(GMM):
                     Psi_list.append(np.diag(fa.noise_variance_))
             components = np.array([np.sum(kmeans.labels_ == k) / n_examples
                                    for k in range(self.n_components)])
+            if np.min(components)*n_examples == 1:
+                print('Warning: Components initialised with only one data ' +
+                      'point. Poor results expected. Consider using fewer ' +
+                      'components.')
             params_init = {'mu_list': mu_list,
                            'W_list': W_list,
                            'Psi_list': Psi_list,
@@ -979,23 +987,13 @@ class MFA(GMM):
         log_r = np.zeros([n_examples, self.n_components])
         for k, mu, Sigma, W, Psi in zip(range(self.n_components), mu_list,
                                         Sigma_list, W_list, Psi_list):
-
-#            print('Sigma = {}'.format(Sigma))
-#            print('Psi: {}'.format(Psi))
-#            print('WW.T: {}'.format(W.dot(W.T)))
             try:
                 log_r[:, k] = multivariate_normal.logpdf(X, mu, Sigma)
-#            except ValueError:
-#                print('ValueError: Sigma = {}'.format(Sigma))
-#                print('Eigenvalues: {}'.format(np.linalg.eigvals(Sigma)))
-#                print('Psi: {}'.format(Psi))
-#                print('WW.T: {}'.format(W.dot(W.T)))
             except np.linalg.linalg.LinAlgError:
                 if self.robust:
-#                    print(Sigma)
-                    Sigma_robust = Sigma + self.SMALL*np.eye(self.data_dim)
+                    Sigma_cond = Sigma + self.SMALL*np.eye(self.data_dim)
                     log_r[:, k] = multivariate_normal.logpdf(X, mu,
-                                                             Sigma_robust)
+                                                             Sigma_cond)
                 else:
                     error_msg = ('Covariance matrix ill-conditioned. Use ' +
                                  'robust=True to pre-condition covariance ' +
@@ -1015,9 +1013,6 @@ class MFA(GMM):
         for mu, W, Psi in zip(mu_list, W_list, Psi_list):
             dev = X - mu
             F = W.dot(W.T) + Psi
-#            print(F)
-            F_inv = np.linalg.inv(W.dot(W.T) + Psi)
-            z = dev.dot(F_inv.dot(W))
             try:
                 F_inv_W = np.linalg.solve(F, W)
             except np.linalg.linalg.LinAlgError:
@@ -1094,7 +1089,6 @@ class MFA(GMM):
 
         # Get Sigma from params
         Sigma_list = self._params_to_Sigma(params)
-
         observed_list = [np.array(np.where(~np.isnan(row))).flatten() for
                          row in X]
         n_examples, data_dim = np.shape(X)
@@ -1110,18 +1104,23 @@ class MFA(GMM):
                 mu_obs = mu[id_obs]
                 Sigma_obs = Sigma[np.ix_(id_obs, id_obs)]
                 try:
-                    log_r[:, k] = multivariate_normal.logpdf(row_obs, mu_obs, Sigma_obs)
+                    log_r[n, k] =  \
+                        multivariate_normal.logpdf(row_obs[np.newaxis, :],
+                                                   mu_obs, Sigma_obs)
                 except np.linalg.linalg.LinAlgError:
                     if self.robust:
-                        Sigma_robust = Sigma_obs + self.SMALL*np.eye(self.data_dim)
-                        log_r[:, k] = multivariate_normal.logpdf(row_obs, mu_obs,
+                        Sigma_robust = (Sigma_obs +
+                                        self.SMALL*np.eye(self.data_dim))
+                        log_r[n, k] = multivariate_normal.logpdf(row_obs,
+                                                                 mu_obs,
                                                                  Sigma_robust)
                     else:
-                        error_msg = ('Covariance matrix ill-conditioned. Use ' +
-                                     'robust=True to pre-condition covariance ' +
-                                     'matrices or choose fewer mixture ' +
-                                     'components')
+                        error_msg = ('Covariance matrix ill-conditioned. ' +
+                                     'Use robust=True to pre-condition ' +
+                                     'covariance matrices, or choose fewer ' +
+                                     'mixture components.')
                         raise np.linalg.linalg.LinAlgError(error_msg)
+
         log_r = log_r + np.log(components)
         log_r_sum = sp.misc.logsumexp(log_r, axis=1)
         responsibilities = np.exp(log_r - log_r_sum[:, np.newaxis])
@@ -1154,7 +1153,7 @@ class MFA(GMM):
 #                    x_tot[n] = row_obs
 #                    xx_tot[n] = np.outer(row_obs, row_obs)
 
-                # Get missing and visible points
+                # Get missing and visible parameters
 #                Psi_obs = Psi[np.ix_(id_obs,id_obs)]
                 Psi_miss = Psi[np.ix_(id_miss, id_miss)]
                 Psi_inv_obs = Psi_inv[np.ix_(id_obs, id_obs)]
@@ -1250,12 +1249,9 @@ class MFA(GMM):
         mu_list = []
         W_list = []
         Psi_list = []
-#        n_examples = resp.shape[0]
         for r, W, x, xx, xz, zx, z, zz in zip(resp.T, W_list_old, x_list,
                                               xx_list, xz_list, zx_list,
                                               z_list, zz_list):
-
-
             # mu
             resid = x - z.dot(W.T)
             mu = np.sum(resid*r[:, np.newaxis], axis=0) / r.sum()
@@ -1268,16 +1264,14 @@ class MFA(GMM):
                 W = np.linalg.solve(W2, W1.T).T
             except np.linalg.linalg.LinAlgError:
                 if self.robust:
-                    W2_robust = W2 + self.SMALL*np.eye(self.latent_dim)
-                    W = np.linalg.solve(W2_robust, W1.T).T
+                    W2_cond = W2 + self.SMALL*np.eye(self.latent_dim)
+                    W = np.linalg.solve(W2_cond, W1.T).T
                 else:
                     error_msg = ('Matrix ill-conditioned. Use ' +
                                  'robust=True to pre-condition covariance ' +
                                  'matrices or choose fewer mixture ' +
                                  'components')
                     raise np.linalg.linalg.LinAlgError(error_msg)
-
-            W = W1.dot(W2)
             W_list.append(W)
 
             # Psi
@@ -1286,7 +1280,6 @@ class MFA(GMM):
                   [0, :, :, :].transpose((1, 0, 2)))
             Psi = np.diag(np.diag(np.sum(s1-s2, axis=0))) / r.sum()
             Psi_list.append(Psi)
-
 
         # Store params in dictionary
         params = {'W_list': W_list,
