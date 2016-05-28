@@ -20,6 +20,10 @@ def main():
 #    gmm = DiagonalGMM(n_components=n_components)
 #    gmm = MPPCA(n_components=n_components, latent_dim=1)
 #    gmm = MFA(n_components=6, latent_dim=1, robust=False)
+    gmm = MFA(n_components=40, latent_dim=10, robust=True, SMALL=1e-6,
+              tol=1e-3)
+#    gmm = MPPCA_Miss(n_components=n_components, latent_dim=2)
+#    gmm = MFA_Miss(n_components=n_components, latent_dim=1)
 
     # Fit GMM
 #    gmm.fit(X_miss, init_method='kmeans')

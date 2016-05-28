@@ -1335,8 +1335,79 @@ class MFA(GMM):
                   'components': components}
         return params
 
-    def _params_to_Sigma(self, params):
+    def sample(self, n_samples=1, noisy=True):
+        """Sample from fitted model.
+
+        Sample from fitted model by first sampling from latent space
+        (spherical Gaussian) then transforming into data space using learned
+        parameters. Noise can then be added optionally.
+
+        Parameters
+        ----------
+        nSamples : int
+            Number of samples to generate
+        noisy : bool
+            Option to add noise to samples (default = True)
+
+        Returns
+        -------
+        dataSamples : array [nSamples, dataDim]
+            Collection of samples in data space.
+        """
+        if not self.isFitted:
+            print("Model is not yet fitted. First use fit to learn the " +
+                  "model params.")
+        else:
+            components = self.params['components']
+            mu_list = self.params['mu_list']
+            Sigma_list = self._params_to_Sigma(self.params, noisy=noisy)
+            components_cumsum = np.cumsum(components)
+            samples = np.zeros([n_samples, self.data_dim])
+            for n in range(n_samples):
+                r = np.random.rand(1)
+                z = np.argmin(r > components_cumsum)
+                samples[n] = rd.multivariate_normal(mu_list[z], Sigma_list[z])
+            return samples
+
+    def _params_to_Sigma(self, params, noisy=True):
         W_list = params['W_list']
         Psi_list = params['Psi_list']
-        Sigma_list = [W.dot(W.T) + Psi for W, Psi in zip(W_list, Psi_list)]
+        if noisy:
+            Sigma_list = [W.dot(W.T) + Psi for
+                          W, Psi in zip(W_list, Psi_list)]
+        else:
+            Sigma_list = [W.dot(W.T) for W in W_list]
         return Sigma_list
+
+    def reconstruct(self, Z, component, noisy=False):
+        """Sample from fitted model.
+
+        Sample from fitted model by first sampling from latent space
+        (spherical Gaussian) then transforming into data space using learned
+        parameters. Noise can then be added optionally.
+
+        Parameters
+        ----------
+        nSamples : int
+            Number of samples to generate
+        noisy : bool
+            Option to add noise to samples (default = True)
+
+        Returns
+        -------
+        dataSamples : array [nSamples, dataDim]
+            Collection of samples in data space.
+        """
+        if not self.isFitted:
+            print("Model is not yet fitted. First use fit to learn the " +
+                  "model params.")
+        else:
+            mu = self.params['mu_list'][component]
+            W = self.params['W_list'][component]
+            Psi = self.params['Psi_list'][component]
+            reconstructions = Z.dot(W.T) + mu
+            if noisy:
+                noise = np.random.multivariate_normal(np.zeros(
+                            self.data_dim), Psi, Z.shape[0])
+                reconstructions = reconstructions + noise
+            return reconstructions
