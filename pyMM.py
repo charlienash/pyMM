@@ -896,7 +896,7 @@ class MPPCA(GMM):
 class MFA(GMM):
 
     def __init__(self, n_components, latent_dim, tol=1e-3, max_iter=1000,
-                 random_state=0, verbose=True, robust=False, SMALL=1e-4):
+                 random_state=0, verbose=True, robust=False, SMALL=1e-5):
 
         super(MFA, self).__init__(n_components=n_components, tol=tol,
                                   max_iter=max_iter,
