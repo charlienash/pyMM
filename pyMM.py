@@ -84,7 +84,8 @@ class GMM():
     TODO
     """
     def __init__(self, n_components, covariance_type='full', tol=1e-3,
-                 max_iter=1000, random_state=0, verbose=True, robust=False):
+                 max_iter=1000, random_state=0, verbose=True, robust=False,
+                 SMALL=1e-8):
         self.n_components = n_components
         self.covariance_type = covariance_type
         self.tol = tol
@@ -93,6 +94,7 @@ class GMM():
         self.verbose = verbose
         self.robust = robust
         self.isFitted = False
+        self.SMALL = True
 
     def _e_step(self, X, params):
         if self.missing_data:
@@ -213,8 +215,8 @@ class GMM():
                          row in X]
         n_examples, data_dim = np.shape(X)
 
-        # Loop over data points computing responsibilities
-        r = np.zeros([n_examples, self.n_components])
+        # Compute responsibilities
+        log_r = np.zeros([n_examples, self.n_components])
         for n in range(n_examples):
             id_obs = observed_list[n]
             row = X[n, :]
@@ -223,11 +225,27 @@ class GMM():
                                     Sigma_list):
                 mu_obs = mu[id_obs]
                 Sigma_obs = Sigma[np.ix_(id_obs, id_obs)]
-                r[n, k] = multivariate_normal.pdf(row_obs[np.newaxis, :],
-                                                  mu_obs, Sigma_obs)
-        r = r * components
-        r_sum = r.sum(axis=1)
-        responsibilities = r / r_sum[:, np.newaxis]
+                try:
+                    log_r[n, k] =  \
+                        multivariate_normal.logpdf(row_obs[np.newaxis, :],
+                                                   mu_obs, Sigma_obs)
+                except np.linalg.linalg.LinAlgError:
+                    if self.robust:
+                        Sigma_robust = (Sigma_obs +
+                                        self.SMALL*np.eye(self.data_dim))
+                        log_r[n, k] = multivariate_normal.logpdf(row_obs,
+                                                                 mu_obs,
+                                                                 Sigma_robust)
+                    else:
+                        error_msg = ('Covariance matrix ill-conditioned. ' +
+                                     'Use robust=True to pre-condition ' +
+                                     'covariance matrices, or choose fewer ' +
+                                     'mixture components.')
+                        raise np.linalg.linalg.LinAlgError(error_msg)
+
+        log_r = log_r + np.log(components)
+        log_r_sum = sp.misc.logsumexp(log_r, axis=1)
+        responsibilities = np.exp(log_r - log_r_sum[:, np.newaxis])
 
         x_list = []
         xx_list = []
@@ -273,8 +291,9 @@ class GMM():
                 xx[np.ix_(id_obs, id_obs)] = np.outer(row_obs, row_obs)
                 xx[np.ix_(id_obs, id_miss)] = np.outer(row_obs, mean_cond)
                 xx[np.ix_(id_miss, id_obs)] = np.outer(mean_cond, row_obs)
-                xx[np.ix_(id_miss, id_miss)] = (np.outer(mean_cond, mean_cond)
-                                                + Sigma_cond)
+                xx[np.ix_(id_miss, id_miss)] = (np.outer(mean_cond,
+                                                         mean_cond) +
+                                                Sigma_cond)
                 xx_tot[n] = xx
             x_list.append(x_tot)
             xx_list.append(xx_tot)
@@ -285,7 +304,7 @@ class GMM():
               'xx_list': xx_list}
 
         # Compute log-likelihood of each example
-        sample_ll = np.log(r_sum)
+        sample_ll = log_r_sum
 
         return ss, sample_ll
 
@@ -345,8 +364,9 @@ class GMM():
             Sigma_list = []
             for k in range(self.n_components):
                 X_k = X[kmeans.labels_ == k, :]
-                if X_k.shape[0] < 5*self.data_dim:
-                    Sigma_list.append(np.eye(self.data_dim))
+                n_k = X_k.shape[0]
+                if n_k == 1:
+                    Sigma_list.append(0.1*np.eye(self.data_dim))
                 else:
                     Sigma_list.append(np.cov(X_k.T))
             components = np.array([np.sum(kmeans.labels_ == k) / n_examples
@@ -577,12 +597,13 @@ class MPPCA(GMM):
     """
 
     def __init__(self, n_components, latent_dim, tol=1e-3, max_iter=1000,
-                 random_state=0, verbose=True, robust=False):
+                 random_state=0, verbose=True, robust=False, SMALL=1e-8):
 
         super(MPPCA, self).__init__(n_components=n_components, tol=tol,
                                     max_iter=max_iter,
                                     random_state=random_state,
-                                    verbose=verbose, robust=robust)
+                                    verbose=verbose, robust=robust,
+                                    SMALL=SMALL)
         self.latent_dim = latent_dim
 
     def _init_params(self, X, init_method='kmeans'):
@@ -647,17 +668,28 @@ class MPPCA(GMM):
         sigma_sq_list = params['sigma_sq_list']
         n_examples, data_dim = X.shape
 
-        # Compute responsibilities
-        r = np.zeros([n_examples, self.n_components])
-
         # Get Sigma from params
         Sigma_list = self._params_to_Sigma(params)
 
+        # Compute responsibilities
+        log_r = np.zeros([n_examples, self.n_components])
         for k, mu, Sigma in zip(range(self.n_components), mu_list, Sigma_list):
-            r[:, k] = multivariate_normal.pdf(X, mu, Sigma)
-        r = r * components
-        r_sum = r.sum(axis=1)
-        responsibilities = r / r_sum[:, np.newaxis]
+            try:
+                log_r[:, k] = multivariate_normal.logpdf(X, mu, Sigma)
+            except np.linalg.linalg.LinAlgError:
+                if self.robust:
+                    Sigma_cond = Sigma + self.SMALL*np.eye(self.data_dim)
+                    log_r[:, k] = multivariate_normal.logpdf(X, mu,
+                                                             Sigma_cond)
+                else:
+                    error_msg = ('Covariance matrix ill-conditioned. Use ' +
+                                 'robust=True to pre-condition covariance ' +
+                                 'matrices or choose fewer mixture ' +
+                                 'components')
+                    raise np.linalg.linalg.LinAlgError(error_msg)
+        log_r = log_r + np.log(components)
+        log_r_sum = sp.misc.logsumexp(log_r, axis=1)
+        responsibilities = np.exp(log_r - log_r_sum[:, np.newaxis])
 
         # Get sufficient statistics E[z] and E[zz^t] for each component
         z_list = []
@@ -732,8 +764,8 @@ class MPPCA(GMM):
                          row in X]
         n_examples, data_dim = np.shape(X)
 
-        # Loop over data points computing responsibilities
-        r = np.zeros([n_examples, self.n_components])
+        # Compute responsibilities
+        log_r = np.zeros([n_examples, self.n_components])
         for n in range(n_examples):
             id_obs = observed_list[n]
             row = X[n, :]
@@ -742,11 +774,27 @@ class MPPCA(GMM):
                                     Sigma_list):
                 mu_obs = mu[id_obs]
                 Sigma_obs = Sigma[np.ix_(id_obs, id_obs)]
-                r[n, k] = multivariate_normal.pdf(row_obs[np.newaxis, :],
-                                                  mu_obs, Sigma_obs)
-        r = r * components
-        r_sum = r.sum(axis=1)
-        responsibilities = r / r_sum[:, np.newaxis]
+                try:
+                    log_r[n, k] =  \
+                        multivariate_normal.logpdf(row_obs[np.newaxis, :],
+                                                   mu_obs, Sigma_obs)
+                except np.linalg.linalg.LinAlgError:
+                    if self.robust:
+                        Sigma_robust = (Sigma_obs +
+                                        self.SMALL*np.eye(self.data_dim))
+                        log_r[n, k] = multivariate_normal.logpdf(row_obs,
+                                                                 mu_obs,
+                                                                 Sigma_robust)
+                    else:
+                        error_msg = ('Covariance matrix ill-conditioned. ' +
+                                     'Use robust=True to pre-condition ' +
+                                     'covariance matrices, or choose fewer ' +
+                                     'mixture components.')
+                        raise np.linalg.linalg.LinAlgError(error_msg)
+
+        log_r = log_r + np.log(components)
+        log_r_sum = sp.misc.logsumexp(log_r, axis=1)
+        responsibilities = np.exp(log_r - log_r_sum[:, np.newaxis])
 
         x_list = []
         xx_list = []
@@ -897,13 +945,12 @@ class MFA(GMM):
 
     def __init__(self, n_components, latent_dim, tol=1e-3, max_iter=1000,
                  random_state=0, verbose=True, robust=False, SMALL=1e-5):
-
         super(MFA, self).__init__(n_components=n_components, tol=tol,
                                   max_iter=max_iter,
                                   random_state=random_state,
-                                  verbose=verbose, robust=robust)
+                                  verbose=verbose, robust=robust,
+                                  SMALL=SMALL)
         self.latent_dim = latent_dim
-        self.SMALL = SMALL
 
     def _init_params(self, X, init_method='kmeans'):
         seed(self.random_state)
@@ -985,8 +1032,7 @@ class MFA(GMM):
 
         # Compute responsibilities
         log_r = np.zeros([n_examples, self.n_components])
-        for k, mu, Sigma, W, Psi in zip(range(self.n_components), mu_list,
-                                        Sigma_list, W_list, Psi_list):
+        for k, mu, Sigma in zip(range(self.n_components), mu_list, Sigma_list):
             try:
                 log_r[:, k] = multivariate_normal.logpdf(X, mu, Sigma)
             except np.linalg.linalg.LinAlgError:
