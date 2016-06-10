@@ -385,11 +385,8 @@ class GMM():
         for k, mu, Sigma, r in zip(range(self.n_components), mu_list,
                                    Sigma_list, responsibilities.T):
 
-            x_tot = np.zeros([n_examples, data_dim])
-            xx_tot = np.zeros([n_examples, data_dim, data_dim])
-#            x_tot = np.zeros(data_dim)
-#            xx_tot = np.zeros([data_dim, data_dim])
-
+            x_tot = np.zeros(data_dim)
+            xx_tot = np.zeros([data_dim, data_dim])
             for n in range(n_examples):
                 id_obs = observed_list[n]
                 id_miss = np.setdiff1d(np.arange(data_dim), id_obs)
@@ -399,10 +396,9 @@ class GMM():
 
                 # Simplify for case with no missing data
                 if n_miss == 0:
-                    x_tot[n] = row_obs
-                    xx_tot[n] = np.outer(row_obs, row_obs)
-#                    x_tot += row_obs*r[n]
-#                    xx_tot += np.outer(row_obs, row_obs)*r[n]
+                    x_tot += row_obs*r[n]
+                    xx_tot += np.outer(row_obs, row_obs)*r[n]
+                    continue
 
                 # Get missing / present parameters
                 mu_obs = mu[id_obs]
@@ -423,8 +419,7 @@ class GMM():
                 x = np.empty(data_dim)
                 x[id_obs] = row_obs
                 x[id_miss] = mean_cond
-                x_tot[n] = x
-#                x_tot += x*r[n]
+                x_tot += x*r[n]
 
                 xx = np.empty([data_dim, data_dim])
                 xx[np.ix_(id_obs, id_obs)] = np.outer(row_obs, row_obs)
@@ -433,15 +428,9 @@ class GMM():
                 xx[np.ix_(id_miss, id_miss)] = (np.outer(mean_cond,
                                                          mean_cond) +
                                                 Sigma_cond)
-#                xx_tot += xx*r[n]
-                xx_tot[n] = xx
+                xx_tot += xx*r[n]
             x_list.append(x_tot)
             xx_list.append(xx_tot)
-
-        x_list = [np.sum(X*r[:, np.newaxis], axis=0) for r, X in
-                  zip(responsibilities.T, x_list)]
-        xx_list = [np.sum(XX * r[:, np.newaxis, np.newaxis], axis=0)
-                   for r, XX in zip(responsibilities.T, xx_list)]
 
         # Store sufficient statistics in dictionary
         ss = {'r_list': r_list,
@@ -475,9 +464,9 @@ class GMM():
         xx_list = ss['xx_list']
         n_examples = ss['n_examples']
 
-        print('x_list: {}'.format(x_list))
+#        print('x_list: {}'.format(x_list))
 #        print('xx_list: {}'.format(xx_list))
-        print('r_list: {}'.format(r_list))
+#        print('r_list: {}'.format(r_list))
 
         # Update components param
         components = np.array([r/n_examples for r in r_list])
@@ -494,8 +483,8 @@ class GMM():
 #                     r.sum() - np.outer(mu, mu))
             Sigma_list.append(Sigma)
 
-        print('Sigma_list: {}'.format(Sigma_list))
-        print('mu_list: {}'.format(Sigma_list))
+#        print('Sigma_list: {}'.format(Sigma_list))
+#        print('mu_list: {}'.format(Sigma_list))
 
         # Store params in dictionary
         params = {'Sigma_list': Sigma_list,
