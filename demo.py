@@ -19,16 +19,18 @@ def main():
 #    gmm = SphericalGMM(n_components=n_components, robust=True)
 #    gmm = DiagonalGMM(n_components=n_components)
 #    gmm = MPPCA(n_components=n_components, latent_dim=1)
-    gmm = MFA(n_components=n_components, latent_dim=1, robust=True, SMALL=1e-10)
+    gmm = MFA(n_components=n_components, latent_dim=1, robust=True,
+              SMALL=1e-10)
 
     # Fit GMM
-#    gmm.fit(X, init_method='kmeans')
-    gmm.fit(X_miss, init_method='kmeans')
+    gmm.fit(X, init_method='kmeans')
+    print('Charlis rsynced succesfully!')
+#    gmm.fit(X_miss, init_method='kmeans')
 
 #    print(gmm.score_samples(X))
 
     # Plot results
-    plot_density(gmm, X=X, n_grid=50)
+#    plot_density(gmm, X=X, n_grid=50)
 #    plt.savefig('test.png', dpi=600)
 
 main()
