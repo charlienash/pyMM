@@ -703,30 +703,41 @@ class MPPCA(GMM):
         responsibilities = np.exp(log_r - log_r_sum[:, np.newaxis])
 
         # Get sufficient statistics E[z] and E[zz^t] for each component
+        x_list = []
         z_list = []
         zz_list = []
         xz_list = []
-        xx_list = []
-        for mu, W, sigma_sq in zip(mu_list, W_list, sigma_sq_list):
+        ss_list = []
+        for mu, W, sigma_sq, r in zip(mu_list, W_list, sigma_sq_list,
+                                      responsibilities.T):
             dev = X - mu
             F_inv = (np.linalg.inv(W.T.dot(W) +
                      sigma_sq*np.eye(self.latent_dim)))
+
+            x_list.append(np.sum(X*r[:, np.newaxis], axis=0))
+
             z = dev.dot(W).dot(F_inv)
-            z_list.append(z)
+            z_list.append(np.sum(z*r[:, np.newaxis], axis=0))
+
             zz = sigma_sq*F_inv + z[:, :, np.newaxis] * z[:, np.newaxis, :]
-            zz_list.append(zz)
-            xx = dev[:, :, np.newaxis] * dev[:, np.newaxis, :]
-            xx_list.append(xx)
+            zz_list.append(np.sum(zz*r[:, np.newaxis, np.newaxis], axis=0))
+
             xz = dev[:, :, np.newaxis] * z[:, np.newaxis, :]
-            xz_list.append(xz)
+            xz_list.append(np.sum(xz*r[:, np.newaxis, np.newaxis], axis=0))
+
+            xx = dev[:, :, np.newaxis] * dev[:, np.newaxis, :]
+            s1 = np.trace(xx, axis1=1, axis2=2)
+            s2 = -2*np.trace(xz.dot(W.T), axis1=1, axis2=2)
+            s3 = np.trace(zz*W.T.dot(W), axis1=1, axis2=2)
+            ss_list.append(np.sum(r*(s1 + s2 + s3)))
 
         # Store sufficient statistics in dictionary
         ss = {'responsibilities': responsibilities,
-              'x_list': [X for k in range(self.n_components)],
-              'xx_list': xx_list,
+              'x_list': x_list,
               'xz_list': xz_list,
               'z_list': z_list,
-              'zz_list': zz_list}
+              'zz_list': zz_list,
+              'ss_list': ss_list}
 
         # Compute log-likelihood
         sample_ll = log_r_sum
@@ -911,7 +922,7 @@ class MPPCA(GMM):
         z_list = ss['z_list']
         zz_list = ss['zz_list']
         xz_list = ss['xz_list']
-        xx_list = ss['xx_list']
+        ss_list = ss['ss_list']
         W_list_old = params['W_list']
 
         # Update components param
@@ -921,20 +932,16 @@ class MPPCA(GMM):
         mu_list = []
         W_list = []
         sigma_sq_list = []
-        for r, W, x, z, zz, xz, xx in zip(resp.T, W_list_old, x_list, z_list,
-                                          zz_list, xz_list, xx_list):
-            resid = x - z.dot(W.T)
-            mu = np.sum(resid*r[:, np.newaxis], axis=0) / r.sum()
+        for r, W, x, z, zz, xz, ss in zip(resp.T, W_list_old, x_list, z_list,
+                                          zz_list, xz_list, ss_list):
+            resid = x - W.dot(z)
+            mu = resid / r.sum()
             mu_list.append(mu)
-            W1 = np.sum(xz*r[:, np.newaxis, np.newaxis], axis=0)
-            W2 = np.linalg.inv(np.sum(zz*r[:, np.newaxis, np.newaxis],
-                                      axis=0))
-            W = W1.dot(W2)
+
+            W = xz.dot(np.linalg.inv(zz))
             W_list.append(W)
-            s1 = np.trace(xx, axis1=1, axis2=2)
-            s2 = -2*np.trace(xz.dot(W.T), axis1=1, axis2=2)
-            s3 = np.trace(zz*W.T.dot(W), axis1=1, axis2=2)
-            sigma_sq = np.sum(r*(s1 + s2 + s3)) / (self.data_dim * r.sum())
+
+            sigma_sq = ss / (self.data_dim * r.sum())
             sigma_sq_list.append(sigma_sq)
 
         # Store params in dictionary
