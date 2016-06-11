@@ -79,7 +79,7 @@ class GMM():
 
     def _e_step(self, X, params):
         if self.missing_data:
-            return self._e_step_miss_2(X, params)
+            return self._e_step_miss(X, params)
         else:
             return self._e_step_no_miss(X, params)
 
@@ -142,26 +142,24 @@ class GMM():
         log_r_sum = sp.misc.logsumexp(log_r, axis=1)
         responsibilities = np.exp(log_r - log_r_sum[:, np.newaxis])
 
-        x_list = []
-        xx_list = []
-        for k, r in zip(range(self.n_components), responsibilities.T):
-            x_tot = np.zeros(self.data_dim)
-            xx_tot = np.zeros([self.data_dim, self.data_dim])
-            for n in range(n_examples):
-                row = X[n]
-                x_tot += row*r[n]
-                xx_tot += np.outer(row, row)*r[n]
-            x_list.append(x_tot)
-            xx_list.append(xx_tot)
+#        x_list = []
+#        xx_list = []
+#        for k, r in zip(range(self.n_components), responsibilities.T):
+#            x_tot = np.zeros(self.data_dim)
+#            xx_tot = np.zeros([self.data_dim, self.data_dim])
+#            for n in range(n_examples):
+#                row = X[n]
+#                x_tot += row*r[n]
+#                xx_tot += np.outer(row, row)*r[n]
+#            x_list.append(x_tot)
+#            xx_list.append(xx_tot)
 
-#        x_list = [np.sum(X*r[:, np.newaxis], axis=0) for r in
-#                  responsibilities.T]
-#        xx_list = [np.sum(X[:, :, np.newaxis] * X[:, np.newaxis, :] *
-#                          r[:, np.newaxis, np.newaxis], axis=0) for r in
-#                   responsibilities.T]
+        x_list = [np.sum(X*r[:, np.newaxis], axis=0) for r in
+                  responsibilities.T]
+        xx_list = [np.sum(X[:, :, np.newaxis] * X[:, np.newaxis, :] *
+                          r[:, np.newaxis, np.newaxis], axis=0) for r in
+                   responsibilities.T]
         r_list = [r.sum() for r in responsibilities.T]
-
-#        print('r_list: {}'.format(r_list))
 
         # Store sufficient statistics in dictionary
         ss = {'r_list': r_list,
@@ -174,140 +172,8 @@ class GMM():
 
         return ss, sample_ll
 
+
     def _e_step_miss(self, X, params):
-        """ E-Step of the EM-algorithm.
-
-        The E-step takes the existing parameters, for the components, bias
-        and noise variance and computes sufficient statistics for the M-Step
-        by taking the expectation of latent variables conditional on the
-        visible variables. Also returns the likelihood for the data X and
-        projections into latent space of the data.
-
-        Args
-        ----
-        X : array, [nExamples, nFeatures]
-            Matrix of training data, where nExamples is the number of
-            examples and nFeatures is the number of features.
-        W : array, [dataDim, latentDim]
-            Component matrix data. Maps latent points to data space.
-        b : array, [dataDim,]
-            Data bias.
-        sigmaSq : float
-            Noise variance parameter.
-
-        Returns
-        -------
-        ss : dict
-
-        proj :
-
-        ll :
-        """
-        # Get current params
-        mu_list = params['mu_list']
-        components = params['components']
-
-        # Get Sigma from params
-        Sigma_list = self._params_to_Sigma(params)
-
-        observed_list = [np.array(np.where(~np.isnan(row))).flatten() for
-                         row in X]
-        n_examples, data_dim = np.shape(X)
-
-        # Compute responsibilities
-        log_r = np.zeros([n_examples, self.n_components])
-        for n in range(n_examples):
-            id_obs = observed_list[n]
-            row = X[n, :]
-            row_obs = row[id_obs]
-            for k, mu, Sigma in zip(range(self.n_components), mu_list,
-                                    Sigma_list):
-                mu_obs = mu[id_obs]
-                Sigma_obs = Sigma[np.ix_(id_obs, id_obs)]
-                try:
-                    log_r[n, k] =  \
-                        multivariate_normal.logpdf(row_obs[np.newaxis, :],
-                                                   mu_obs, Sigma_obs)
-                except np.linalg.linalg.LinAlgError:
-                    if self.robust:
-                        Sigma_robust = (Sigma_obs +
-                                        self.SMALL*np.eye(self.data_dim))
-                        log_r[n, k] = multivariate_normal.logpdf(row_obs,
-                                                                 mu_obs,
-                                                                 Sigma_robust)
-                    else:
-                        error_msg = ('Covariance matrix ill-conditioned. ' +
-                                     'Use robust=True to pre-condition ' +
-                                     'covariance matrices, or choose fewer ' +
-                                     'mixture components.')
-                        raise np.linalg.linalg.LinAlgError(error_msg)
-
-        log_r = log_r + np.log(components)
-        log_r_sum = sp.misc.logsumexp(log_r, axis=1)
-        responsibilities = np.exp(log_r - log_r_sum[:, np.newaxis])
-
-        x_list = []
-        xx_list = []
-        for k, mu, Sigma in zip(range(self.n_components), mu_list, Sigma_list):
-
-            x_tot = np.zeros([n_examples, data_dim])
-            xx_tot = np.zeros([n_examples, data_dim, data_dim])
-
-            for n in range(n_examples):
-                id_obs = observed_list[n]
-                id_miss = np.setdiff1d(np.arange(data_dim), id_obs)
-                n_miss = len(id_miss)
-                row = X[n, :]
-                row_obs = row[id_obs]
-
-                # Simplify for case with no missing data
-                if n_miss == 0:
-                    x_tot[n] = row_obs
-                    xx_tot[n] = np.outer(row_obs, row_obs)
-
-                # Get missing / present parameters
-                mu_obs = mu[id_obs]
-                mu_miss = mu[id_miss]
-                Sigma_obs = Sigma[np.ix_(id_obs, id_obs)]
-                Sigma_miss = Sigma[np.ix_(id_miss, id_miss)]
-                Sigma_obs_miss = Sigma[np.ix_(id_obs, id_miss)]
-                Sigma_miss_obs = Sigma[np.ix_(id_miss, id_obs)]
-
-                # Get conditional distribution p(x_miss | x_vis, params_k)
-                mean_cond = (mu_miss + Sigma_miss_obs.dot(
-                             np.linalg.inv(Sigma_obs)).dot(row_obs - mu_obs))
-                Sigma_cond = (Sigma_miss -
-                              Sigma_miss_obs.dot(np.linalg.inv(Sigma_obs))
-                              .dot(Sigma_obs_miss))
-
-                # Get sufficient statistics E[x] and E[xx^t]
-                x = np.empty(data_dim)
-                x[id_obs] = row_obs
-                x[id_miss] = mean_cond
-                x_tot[n] = x
-
-                xx = np.empty([data_dim, data_dim])
-                xx[np.ix_(id_obs, id_obs)] = np.outer(row_obs, row_obs)
-                xx[np.ix_(id_obs, id_miss)] = np.outer(row_obs, mean_cond)
-                xx[np.ix_(id_miss, id_obs)] = np.outer(mean_cond, row_obs)
-                xx[np.ix_(id_miss, id_miss)] = (np.outer(mean_cond,
-                                                         mean_cond) +
-                                                Sigma_cond)
-                xx_tot[n] = xx
-            x_list.append(x_tot)
-            xx_list.append(xx_tot)
-
-        # Store sufficient statistics in dictionary
-        ss = {'responsibilities': responsibilities,
-              'x_list': x_list,
-              'xx_list': xx_list}
-
-        # Compute log-likelihood of each example
-        sample_ll = log_r_sum
-
-        return ss, sample_ll
-
-    def _e_step_miss_2(self, X, params):
         """ E-Step of the EM-algorithm.
 
         The E-step takes the existing parameters, for the components, bias
@@ -863,7 +729,7 @@ class MPPCA(GMM):
               'zz_list': zz_list}
 
         # Compute log-likelihood
-        sample_ll = np.log(r_sum)
+        sample_ll = log_r_sum
 
         return ss, sample_ll
 
@@ -1020,7 +886,7 @@ class MPPCA(GMM):
               'zz_list': zz_list}
 
         # Compute log-likelihood
-        sample_ll = np.log(r_sum)
+        sample_ll = log_r_sum
 
         return ss, sample_ll
 
