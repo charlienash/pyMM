@@ -117,12 +117,11 @@ class GMM():
         components = params['components']
         n_examples, data_dim = X.shape
 
-        # Compute responsibilities
-        log_r = np.zeros([n_examples, self.n_components])
-
         # Get Sigma from params
         Sigma_list = self._params_to_Sigma(params)
 
+        # Compute responsibilities
+        log_r = np.zeros([n_examples, self.n_components])
         for k, mu, Sigma in zip(range(self.n_components), mu_list,
                                 Sigma_list):
             try:
@@ -142,18 +141,7 @@ class GMM():
         log_r_sum = sp.misc.logsumexp(log_r, axis=1)
         responsibilities = np.exp(log_r - log_r_sum[:, np.newaxis])
 
-#        x_list = []
-#        xx_list = []
-#        for k, r in zip(range(self.n_components), responsibilities.T):
-#            x_tot = np.zeros(self.data_dim)
-#            xx_tot = np.zeros([self.data_dim, self.data_dim])
-#            for n in range(n_examples):
-#                row = X[n]
-#                x_tot += row*r[n]
-#                xx_tot += np.outer(row, row)*r[n]
-#            x_list.append(x_tot)
-#            xx_list.append(xx_tot)
-
+        # Get sufficient statistics
         x_list = [np.sum(X*r[:, np.newaxis], axis=0) for r in
                   responsibilities.T]
         xx_list = [np.sum(X[:, :, np.newaxis] * X[:, np.newaxis, :] *
@@ -171,7 +159,6 @@ class GMM():
         sample_ll = log_r_sum
 
         return ss, sample_ll
-
 
     def _e_step_miss(self, X, params):
         """ E-Step of the EM-algorithm.
@@ -240,12 +227,12 @@ class GMM():
                                      'covariance matrices, or choose fewer ' +
                                      'mixture components.')
                         raise np.linalg.linalg.LinAlgError(error_msg)
-
         log_r = log_r + np.log(components)
         log_r_sum = sp.misc.logsumexp(log_r, axis=1)
         responsibilities = np.exp(log_r - log_r_sum[:, np.newaxis])
-        r_list = [r.sum() for r in responsibilities.T]
 
+        # Get sufficient statistics
+        r_list = [r.sum() for r in responsibilities.T]
         x_list = []
         xx_list = []
         for k, mu, Sigma, r in zip(range(self.n_components), mu_list,
@@ -281,12 +268,13 @@ class GMM():
                               Sigma_miss_obs.dot(np.linalg.inv(Sigma_obs))
                               .dot(Sigma_obs_miss))
 
-                # Get sufficient statistics E[x] and E[xx^t]
+                # Get sufficient statistics E[x]
                 x = np.empty(data_dim)
                 x[id_obs] = row_obs
                 x[id_miss] = mean_cond
                 x_tot += x*r[n]
 
+                # Get sufficient statistic E[xx^t]
                 xx = np.empty([data_dim, data_dim])
                 xx[np.ix_(id_obs, id_obs)] = np.outer(row_obs, row_obs)
                 xx[np.ix_(id_obs, id_miss)] = np.outer(row_obs, mean_cond)
@@ -330,10 +318,6 @@ class GMM():
         xx_list = ss['xx_list']
         n_examples = ss['n_examples']
 
-#        print('x_list: {}'.format(x_list))
-#        print('xx_list: {}'.format(xx_list))
-#        print('r_list: {}'.format(r_list))
-
         # Update components param
         components = np.array([r/n_examples for r in r_list])
 
@@ -342,15 +326,9 @@ class GMM():
         Sigma_list = []
         for r, x, xx in zip(r_list, x_list, xx_list):
             mu = x / r
-#            mu = np.sum(x*r[:, np.newaxis], axis=0) / r.sum()
             mu_list.append(mu)
             Sigma = (xx / r - np.outer(mu, mu))
-#            Sigma = (np.sum((xx*r[:, np.newaxis, np.newaxis]), axis=0) /
-#                     r.sum() - np.outer(mu, mu))
             Sigma_list.append(Sigma)
-
-#        print('Sigma_list: {}'.format(Sigma_list))
-#        print('mu_list: {}'.format(Sigma_list))
 
         # Store params in dictionary
         params = {'Sigma_list': Sigma_list,
@@ -702,7 +680,8 @@ class MPPCA(GMM):
         log_r_sum = sp.misc.logsumexp(log_r, axis=1)
         responsibilities = np.exp(log_r - log_r_sum[:, np.newaxis])
 
-        # Get sufficient statistics E[z] and E[zz^t] for each component
+        # Get sufficient statistics for each component
+        r_list = [r.sum() for r in responsibilities.T]
         x_list = []
         z_list = []
         zz_list = []
@@ -732,7 +711,8 @@ class MPPCA(GMM):
             ss_list.append(np.sum(r*(s1 + s2 + s3)))
 
         # Store sufficient statistics in dictionary
-        ss = {'responsibilities': responsibilities,
+        ss = {'n_examples': n_examples,
+              'r_list': r_list,
               'x_list': x_list,
               'xz_list': xz_list,
               'z_list': z_list,
@@ -818,32 +798,26 @@ class MPPCA(GMM):
         log_r_sum = sp.misc.logsumexp(log_r, axis=1)
         responsibilities = np.exp(log_r - log_r_sum[:, np.newaxis])
 
+        # Get sufficient statistics for each component
+        r_list = [r.sum() for r in responsibilities.T]
         x_list = []
-        xx_list = []
         z_list = []
         zz_list = []
         xz_list = []
-
-        for k, mu, W, sigma_sq in zip(range(self.n_components), mu_list,
-                                      W_list, sigma_sq_list):
-
-            x_tot = np.zeros([n_examples, data_dim])
-            xx_tot = np.zeros([n_examples, data_dim, data_dim])
-            z_tot = np.zeros([n_examples, self.latent_dim])
-            zz_tot = np.zeros([n_examples, self.latent_dim, self.latent_dim])
-            xz_tot = np.zeros([n_examples, self.data_dim, self.latent_dim])
-
+        ss_list = []
+        for mu, W, sigma_sq, r in zip(mu_list, W_list, sigma_sq_list,
+                                      responsibilities.T):
+            x_tot = np.zeros(data_dim)
+            z_tot = np.zeros(self.latent_dim)
+            zz_tot = np.zeros([self.latent_dim, self.latent_dim])
+            xz_tot = np.zeros([self.data_dim, self.latent_dim])
+            ss_tot = 0
             for n in range(n_examples):
                 id_obs = observed_list[n]
                 id_miss = np.setdiff1d(np.arange(data_dim), id_obs)
                 n_miss = len(id_miss)
                 row = X[n, :]
                 row_obs = row[id_obs]
-
-#                # Simplify for case with no missing data
-#                if n_miss == 0:
-#                    x_tot[n] = row_obs
-#                    xx_tot[n] = np.outer(row_obs, row_obs)
 
                 # Get missing and visible points
                 W_obs = W[id_obs, :]
@@ -858,18 +832,36 @@ class MPPCA(GMM):
                 cov_z_cond = sigma_sq*F_inv
                 mean_z_cond = F_inv.dot(W_obs.T).dot(row_obs - mu_obs)
 
+                # Simplify for case with no missing data
+                if n_miss == 0:
+                    x_tot += row_obs*r[n]
+                    z_tot += mean_z_cond*r[n]
+                    zz = cov_z_cond + np.outer(mean_z_cond, mean_z_cond)
+                    zz_tot += zz*r[n]
+                    xz = np.outer(row_min_mu, mean_z_cond)
+                    xz_tot += xz*r[n]
+                    xx = np.outer(row_min_mu, row_min_mu)
+                    s1 = np.trace(xx)
+                    s2 = -2*np.trace(xz.dot(W.T))
+                    s3 = np.trace(zz*W.T.dot(W))
+                    ss_tot += (s1 + s2 + s3)*r[n]
+                    continue
+
                 # Get conditional distribution of p(x_miss | z, params)
                 mean_x_miss = W_miss.dot(mean_z_cond) + mu_miss
 
                 # Append sufficient statistics
-                z_tot[n] = mean_z_cond
-                zz_tot[n] = cov_z_cond + np.outer(mean_z_cond, mean_z_cond)
+                z_tot += mean_z_cond*r[n]
+                zz = cov_z_cond + np.outer(mean_z_cond, mean_z_cond)
+                zz_tot += zz*r[n]
 
-                x_tot[n, id_obs] = row_obs
-                x_tot[n, id_miss] = mean_x_miss
+                x_tot[id_obs] += row_obs*r[n]
+                x_tot[id_miss] += mean_x_miss*r[n]
 
-                xz_tot[n, id_miss, :] = W_miss.dot(zz_tot[n])
-                xz_tot[n, id_obs, :] = np.outer(row_min_mu, mean_z_cond)
+                xz = np.zeros([self.data_dim, self.latent_dim])
+                xz[id_miss, :] = W_miss.dot(zz)
+                xz[id_obs, :] = np.outer(row_min_mu, mean_z_cond)
+                xz_tot += xz*r[n]
 
                 xx = np.empty([data_dim, data_dim])
                 xx[np.ix_(id_obs, id_obs)] = np.outer(row_min_mu, row_min_mu)
@@ -877,24 +869,28 @@ class MPPCA(GMM):
                                                        mean_x_miss - mu_miss)
                 xx[np.ix_(id_miss, id_obs)] = np.outer(mean_x_miss - mu_miss,
                                                        row_min_mu)
-                xx[np.ix_(id_miss, id_miss)] = (W_miss.dot(zz_tot[n]).
+                xx[np.ix_(id_miss, id_miss)] = (W_miss.dot(zz).
                                                 dot(W_miss.T) +
                                                 sigma_sq*np.eye(n_miss))
-                xx_tot[n] = xx
+                s1 = np.trace(xx)
+                s2 = -2*np.trace(xz.dot(W.T))
+                s3 = np.trace(zz*W.T.dot(W))
+                ss_tot += (s1 + s2 + s3)*r[n]
 
             x_list.append(x_tot)
-            xx_list.append(xx_tot)
             z_list.append(z_tot)
             zz_list.append(zz_tot)
             xz_list.append(xz_tot)
+            ss_list.append(ss_tot)
 
         # Store sufficient statistics in dictionary
-        ss = {'responsibilities': responsibilities,
+        ss = {'n_examples': n_examples,
+              'r_list': r_list,
               'x_list': x_list,
-              'xx_list': xx_list,
               'xz_list': xz_list,
               'z_list': z_list,
-              'zz_list': zz_list}
+              'zz_list': zz_list,
+              'ss_list': ss_list}
 
         # Compute log-likelihood
         sample_ll = log_r_sum
@@ -917,7 +913,8 @@ class MPPCA(GMM):
         params : dict
 
         """
-        resp = ss['responsibilities']
+        n_examples = ss['n_examples']
+        r_list = ss['r_list']
         x_list = ss['x_list']
         z_list = ss['z_list']
         zz_list = ss['zz_list']
@@ -926,22 +923,22 @@ class MPPCA(GMM):
         W_list_old = params['W_list']
 
         # Update components param
-        components = np.mean(resp, axis=0)
+        components = np.array([r/n_examples for r in r_list])
 
         # Update mean / Sigma params
         mu_list = []
         W_list = []
         sigma_sq_list = []
-        for r, W, x, z, zz, xz, ss in zip(resp.T, W_list_old, x_list, z_list,
+        for r, W, x, z, zz, xz, ss in zip(r_list, W_list_old, x_list, z_list,
                                           zz_list, xz_list, ss_list):
             resid = x - W.dot(z)
-            mu = resid / r.sum()
+            mu = resid / r
             mu_list.append(mu)
 
             W = xz.dot(np.linalg.inv(zz))
             W_list.append(W)
 
-            sigma_sq = ss / (self.data_dim * r.sum())
+            sigma_sq = ss / (self.data_dim * r)
             sigma_sq_list.append(sigma_sq)
 
         # Store params in dictionary
@@ -1069,12 +1066,15 @@ class MFA(GMM):
         responsibilities = np.exp(log_r - log_r_sum[:, np.newaxis])
 
         # Get sufficient statistics E[z] and E[zz^t] for each component
+        r_list = [r.sum() for r in responsibilities.T]
+        x_list = []
         z_list = []
         zz_list = []
         xz_list = []
         zx_list = []
         xx_list = []
-        for mu, W, Psi in zip(mu_list, W_list, Psi_list):
+        for mu, W, Psi, r in zip(mu_list, W_list, Psi_list,
+                                 responsibilities.T):
             dev = X - mu
             F = W.dot(W.T) + Psi
             try:
@@ -1089,21 +1089,22 @@ class MFA(GMM):
                                  'matrices or choose fewer mixture ' +
                                  'components')
                     raise np.linalg.linalg.LinAlgError(error_msg)
+            x_list.append(np.sum(X*r[:, np.newaxis], axis=0))
             z = dev.dot(F_inv_W)
-            z_list.append(z)
+            z_list.append(np.sum(z*r[:, np.newaxis], axis=0))
             zz = (np.eye(self.latent_dim) - W.T.dot(F_inv_W) +
                   z[:, :, np.newaxis] * z[:, np.newaxis, :])
-            zz_list.append(zz)
+            zz_list.append(np.sum(zz*r[:, np.newaxis, np.newaxis], axis=0))
             xx = dev[:, :, np.newaxis] * dev[:, np.newaxis, :]
-            xx_list.append(xx)
+            xx_list.append(np.sum(xx*r[:, np.newaxis, np.newaxis], axis=0))
             xz = dev[:, :, np.newaxis] * z[:, np.newaxis, :]
-            xz_list.append(xz)
+            xz_list.append(np.sum(xz*r[:, np.newaxis, np.newaxis], axis=0))
             zx = z[:, :, np.newaxis] * dev[:, np.newaxis, :]
-            zx_list.append(zx)
-        x_list = [X for k in range(self.n_components)]
+            zx_list.append(np.sum(zx*r[:, np.newaxis, np.newaxis], axis=0))
 
         # Store sufficient statistics in dictionary
-        ss = {'responsibilities': responsibilities,
+        ss = {'n_examples': n_examples,
+              'r_list': r_list,
               'x_list': x_list,
               'xx_list': xx_list,
               'xz_list': xz_list,
@@ -1189,36 +1190,32 @@ class MFA(GMM):
         log_r_sum = sp.misc.logsumexp(log_r, axis=1)
         responsibilities = np.exp(log_r - log_r_sum[:, np.newaxis])
 
+        # Get sufficient statistics for each component
+        r_list = [r.sum() for r in responsibilities.T]
         x_list = []
         xx_list = []
         z_list = []
         zz_list = []
         xz_list = []
         zx_list = []
-        for k, mu, W, Psi in zip(range(self.n_components), mu_list, W_list,
-                                 Psi_list):
+        for mu, W, Psi, r in zip(mu_list, W_list, Psi_list,
+                                 responsibilities.T):
             Psi_inv = np.linalg.inv(Psi)
-            x_tot = np.zeros([n_examples, data_dim])
-            xx_tot = np.zeros([n_examples, data_dim, data_dim])
-            z_tot = np.zeros([n_examples, self.latent_dim])
-            zz_tot = np.zeros([n_examples, self.latent_dim, self.latent_dim])
-            xz_tot = np.zeros([n_examples, self.data_dim, self.latent_dim])
-            zx_tot = np.zeros([n_examples, self.latent_dim, self.data_dim])
+            x_tot = np.zeros(data_dim)
+            xx_tot = np.zeros([data_dim, data_dim])
+            z_tot = np.zeros([self.latent_dim])
+            zz_tot = np.zeros([self.latent_dim, self.latent_dim])
+            xz_tot = np.zeros([self.data_dim, self.latent_dim])
+            zx_tot = np.zeros([self.latent_dim, self.data_dim])
 
             for n in range(n_examples):
                 id_obs = observed_list[n]
                 id_miss = np.setdiff1d(np.arange(data_dim), id_obs)
-#                n_miss = len(id_miss)
+                n_miss = len(id_miss)
                 row = X[n, :]
                 row_obs = row[id_obs]
 
-#                # Simplify for case with no missing data
-#                if n_miss == 0:
-#                    x_tot[n] = row_obs
-#                    xx_tot[n] = np.outer(row_obs, row_obs)
-
                 # Get missing and visible parameters
-#                Psi_obs = Psi[np.ix_(id_obs,id_obs)]
                 Psi_miss = Psi[np.ix_(id_miss, id_miss)]
                 Psi_inv_obs = Psi_inv[np.ix_(id_obs, id_obs)]
                 W_obs = W[id_obs, :]
@@ -1235,21 +1232,38 @@ class MFA(GMM):
                 mean_z_cond = Beta.dot(row_min_mu)
                 cov_z_cond = np.eye(self.latent_dim) - Beta.dot(W_obs)
 
+                # Simplify for case with no missing data
+                if n_miss == 0:
+                    x_tot += row_obs*r[n]
+                    z_tot += mean_z_cond*r[n]
+                    zz = cov_z_cond + np.outer(mean_z_cond, mean_z_cond)
+                    zz_tot += zz*r[n]
+                    xz = np.outer(row_min_mu, mean_z_cond)
+                    xz_tot += xz*r[n]
+                    zx = xz.T
+                    zx_tot += zx*r[n]
+                    xx = np.outer(row_min_mu, row_min_mu)
+                    xx_tot += xx*r[n]
+                    continue
+
                 # Get conditional distribution of p(x_miss | z, params)
                 mean_x_miss = W_miss.dot(mean_z_cond) + mu_miss
 
                 # Append sufficient statistics
-                z_tot[n] = mean_z_cond
-                zz_tot[n] = cov_z_cond + np.outer(mean_z_cond, mean_z_cond)
+                z_tot += mean_z_cond*r[n]
+                zz = cov_z_cond + np.outer(mean_z_cond, mean_z_cond)
+                zz_tot += zz
 
-                x_tot[n, id_obs] = row_obs
-                x_tot[n, id_miss] = mean_x_miss
+                x_tot[id_obs] += row_obs*r[n]
+                x_tot[id_miss] += mean_x_miss*r[n]
 
-                xz_tot[n, id_miss, :] = W_miss.dot(zz_tot[n])
-                xz_tot[n, id_obs, :] = np.outer(row_min_mu, mean_z_cond)
+                xz = np.zeros([self.data_dim, self.latent_dim])
+                xz[id_miss, :] = W_miss.dot(zz)
+                xz[id_obs, :] = np.outer(row_min_mu, mean_z_cond)
+                xz_tot += xz*r[n]
 
-                zx_tot[n, :, id_miss] = zz_tot[n].dot(W_miss.T).T
-                zx_tot[n, :, id_obs] = np.outer(mean_z_cond, row_min_mu).T
+                zx = xz.T
+                zx_tot += zx*r[n]
 
                 xx = np.empty([data_dim, data_dim])
                 xx[np.ix_(id_obs, id_obs)] = np.outer(row_min_mu, row_min_mu)
@@ -1257,9 +1271,9 @@ class MFA(GMM):
                                                        mean_x_miss - mu_miss)
                 xx[np.ix_(id_miss, id_obs)] = np.outer(mean_x_miss - mu_miss,
                                                        row_min_mu)
-                xx[np.ix_(id_miss, id_miss)] = (W_miss.dot(zz_tot[n]).dot(
+                xx[np.ix_(id_miss, id_miss)] = (W_miss.dot(zz).dot(
                                                 W_miss.T) + Psi_miss)
-                xx_tot[n] = xx
+                xx_tot += xx*r[n]
             x_list.append(x_tot)
             xx_list.append(xx_tot)
             z_list.append(z_tot)
@@ -1268,7 +1282,8 @@ class MFA(GMM):
             zx_list.append(zx_tot)
 
         # Store sufficient statistics in dictionary
-        ss = {'responsibilities': responsibilities,
+        ss = {'n_examples': n_examples,
+              'r_list': r_list,
               'x_list': x_list,
               'xx_list': xx_list,
               'xz_list': xz_list,
@@ -1297,7 +1312,8 @@ class MFA(GMM):
         params : dict
 
         """
-        resp = ss['responsibilities']
+        n_examples = ss['n_examples']
+        r_list = ss['r_list']
         x_list = ss['x_list']
         xx_list = ss['xx_list']
         xz_list = ss['xz_list']
@@ -1307,29 +1323,27 @@ class MFA(GMM):
         W_list_old = params['W_list']
 
         # Update components param
-        components = np.mean(resp, axis=0)
+        components = np.array([r/n_examples for r in r_list])
 
         # Update mean / Sigma params
         mu_list = []
         W_list = []
         Psi_list = []
-        for r, W, x, xx, xz, zx, z, zz in zip(resp.T, W_list_old, x_list,
+        for r, W, x, xx, xz, zx, z, zz in zip(r_list, W_list_old, x_list,
                                               xx_list, xz_list, zx_list,
                                               z_list, zz_list):
             # mu
-            resid = x - z.dot(W.T)
-            mu = np.sum(resid*r[:, np.newaxis], axis=0) / r.sum()
+            resid = x - W.dot(z)
+            mu = resid / r
             mu_list.append(mu)
 
             # W
-            W1 = np.sum(xz*r[:, np.newaxis, np.newaxis], axis=0)
-            W2 = np.sum(zz*r[:, np.newaxis, np.newaxis], axis=0)
             try:
-                W = np.linalg.solve(W2, W1.T).T
+                W = np.linalg.solve(zz, xz.T).T
             except np.linalg.linalg.LinAlgError:
                 if self.robust:
-                    W2_cond = W2 + self.SMALL*np.eye(self.latent_dim)
-                    W = np.linalg.solve(W2_cond, W1.T).T
+                    zz_cond = zz + self.SMALL*np.eye(self.latent_dim)
+                    W = np.linalg.solve(zz_cond, xz.T).T
                 else:
                     error_msg = ('Matrix ill-conditioned. Use ' +
                                  'robust=True to pre-condition covariance ' +
@@ -1339,10 +1353,7 @@ class MFA(GMM):
             W_list.append(W)
 
             # Psi
-            s1 = xx*r[:, np.newaxis, np.newaxis]
-            s2 = (W[np.newaxis, :, :].dot(zx*r[:, np.newaxis, np.newaxis])
-                  [0, :, :, :].transpose((1, 0, 2)))
-            Psi = np.diag(np.diag(np.sum(s1-s2, axis=0))) / r.sum()
+            Psi = np.diag(np.diag(xx - W.dot(zx))) / r
             Psi_list.append(Psi)
 
         # Store params in dictionary
