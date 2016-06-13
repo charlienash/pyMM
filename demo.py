@@ -4,9 +4,9 @@ from util import _generate_mixture_data, plot_density
 
 
 def main():
-    n_examples = 2000
-    data_dim = 200
-    n_components = 3
+    n_examples = 2500
+    data_dim = 500
+    n_components = 1
     X = _generate_mixture_data(data_dim, n_components, n_examples)
 
     # Obscure data
@@ -15,16 +15,16 @@ def main():
     X_miss[r > 0.7] = np.nan
 
     # Initialize model
-#    gmm = GMM(n_components=n_components, robust=True)
+    gmm = GMM(n_components=n_components, robust=True, SMALL=1e-5)
 #    gmm = SphericalGMM(n_components=n_components, robust=True)
 #    gmm = DiagonalGMM(n_components=n_components)
 #    gmm = MPPCA(n_components=n_components, latent_dim=1)
-    gmm = MFA(n_components=n_components, latent_dim=50)
+#    gmm = MFA(n_components=n_components, latent_dim=50)
 
     # Fit GMM
+#    gmm.stepwise_fit(X, init_method='kmeans')
     gmm.fit(X, init_method='kmeans')
 #    gmm.fit(X_miss, init_method='kmeans')
-
 
     # Plot results
 #    plot_density(gmm, X=X, n_grid=50)
