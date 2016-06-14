@@ -115,7 +115,7 @@ class GMM():
         # Get params
         mu_list = params['mu_list']
         components = params['components']
-        n_examples, data_dim = X.shape
+        n_examples = X.shape[0]
 
         # Get Sigma from params
         Sigma_list = self._params_to_Sigma(params)
@@ -124,7 +124,6 @@ class GMM():
         log_r = np.zeros([n_examples, self.n_components])
         for k, mu, Sigma in zip(range(self.n_components), mu_list,
                                 Sigma_list):
-#            print(np.linalg.eig(Sigma))
             try:
                 log_r[:, k] = multivariate_normal.logpdf(X, mu, Sigma)
             except (np.linalg.linalg.LinAlgError, ValueError):
@@ -373,21 +372,21 @@ class GMM():
             Matrix of training data, where nExamples is the number of
             examples and nFeatures is the number of features.
         """
-        n_examples, data_dim = np.shape(X)
-        self.data_dim = data_dim
-        self.n_examples = n_examples
         if np.isnan(X).any():
             self.missing_data = True
         else:
             self.missing_data = False
 
+        # Check for missing values and remove if whole row is missing
+        X = X[~np.isnan(X).all(axis=1), :]
+        n_examples, data_dim = np.shape(X)
+        self.data_dim = data_dim
+        self.n_examples = n_examples
+
         if params_init is None:
             params = self._init_params(X, init_method)
         else:
             params = params_init
-
-        # Check for missing values and remove if whole row is missing
-        X = X[~np.isnan(X).all(axis=1), :]
 
         oldL = -np.inf
         for i in range(self.max_iter):
@@ -398,7 +397,7 @@ class GMM():
             # Evaluate likelihood
             ll = sample_ll.mean() / self.data_dim
             if self.verbose:
-                print("Iter {:d}   NLL: {:.3f}   Change: {:.3f}".format(i,
+                print("Iter {:d}   NLL: {:.4f}   Change: {:.4f}".format(i,
                       -ll, -(ll-oldL)), flush=True)
 
             # Break if change in likelihood is small
@@ -421,7 +420,7 @@ class GMM():
         self.isFitted = True
 
     def stepwise_fit(self, X, params_init=None, init_method='kmeans',
-                     batch_size=500, step_alpha=0.75):
+                     batch_size=250, step_alpha=0.7):
         """ Fit the model using EM with data X.
 
         Args
@@ -430,21 +429,21 @@ class GMM():
             Matrix of training data, where nExamples is the number of
             examples and nFeatures is the number of features.
         """
-        n_examples, data_dim = np.shape(X)
-        self.data_dim = data_dim
-        self.n_examples = n_examples
         if np.isnan(X).any():
             self.missing_data = True
         else:
             self.missing_data = False
 
+        # Check for missing values and remove if whole row is missing
+        X = X[~np.isnan(X).all(axis=1), :]
+        n_examples, data_dim = np.shape(X)
+        self.data_dim = data_dim
+        self.n_examples = n_examples
+
         if params_init is None:
             params = self._init_params(X, init_method)
         else:
             params = params_init
-
-        # Check for missing values and remove if whole row is missing
-        X = X[~np.isnan(X).all(axis=1), :]
 
         # Get batch indices
         batch_id = np.hstack([np.arange(0, n_examples, batch_size),
@@ -465,7 +464,7 @@ class GMM():
             # Evaluate likelihood
             ll = sample_ll.mean() / self.data_dim
             if self.verbose:
-                print("Iter {:d}   NLL: {:.3f}   Change: {:.3f}".format(i,
+                print("Iter {:d}   NLL: {:.4f}   Change: {:.4f}".format(i,
                       -ll, -(ll-oldL)), flush=True)
 
             # Break if change in likelihood is small
@@ -812,8 +811,7 @@ class MPPCA(GMM):
             ss_list.append(np.sum(r*(s1 + s2 + s3)))
 
         # Store sufficient statistics in dictionary
-        ss = {'n_examples': n_examples,
-              'r_list': r_list,
+        ss = {'r_list': r_list,
               'x_list': x_list,
               'xz_list': xz_list,
               'z_list': z_list,
@@ -985,8 +983,7 @@ class MPPCA(GMM):
             ss_list.append(ss_tot)
 
         # Store sufficient statistics in dictionary
-        ss = {'n_examples': n_examples,
-              'r_list': r_list,
+        ss = {'r_list': r_list,
               'x_list': x_list,
               'xz_list': xz_list,
               'z_list': z_list,
@@ -1014,7 +1011,7 @@ class MPPCA(GMM):
         params : dict
 
         """
-        n_examples = ss['n_examples']
+        n_examples = self.n_examples
         r_list = ss['r_list']
         x_list = ss['x_list']
         z_list = ss['z_list']
@@ -1204,8 +1201,7 @@ class MFA(GMM):
             zx_list.append(np.sum(zx*r[:, np.newaxis, np.newaxis], axis=0))
 
         # Store sufficient statistics in dictionary
-        ss = {'n_examples': n_examples,
-              'r_list': r_list,
+        ss = {'r_list': r_list,
               'x_list': x_list,
               'xx_list': xx_list,
               'xz_list': xz_list,
@@ -1383,8 +1379,7 @@ class MFA(GMM):
             zx_list.append(zx_tot)
 
         # Store sufficient statistics in dictionary
-        ss = {'n_examples': n_examples,
-              'r_list': r_list,
+        ss = {'r_list': r_list,
               'x_list': x_list,
               'xx_list': xx_list,
               'xz_list': xz_list,
@@ -1413,7 +1408,7 @@ class MFA(GMM):
         params : dict
 
         """
-        n_examples = ss['n_examples']
+        n_examples = self.n_examples
         r_list = ss['r_list']
         x_list = ss['x_list']
         xx_list = ss['xx_list']
