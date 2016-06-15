@@ -419,107 +419,6 @@ class GMM():
         self.trainNll = ll
         self.isFitted = True
 
-    def stepwise_fit(self, X, params_init=None, init_method='kmeans',
-                     batch_size=250, step_alpha=0.7):
-        """ Fit the model using EM with data X.
-
-        Args
-        ----
-        X : array, [nExamples, nFeatures]
-            Matrix of training data, where nExamples is the number of
-            examples and nFeatures is the number of features.
-        """
-        if np.isnan(X).any():
-            self.missing_data = True
-        else:
-            self.missing_data = False
-
-        # Check for missing values and remove if whole row is missing
-        X = X[~np.isnan(X).all(axis=1), :]
-        n_examples, data_dim = np.shape(X)
-        self.data_dim = data_dim
-        self.n_examples = n_examples
-
-        if params_init is None:
-            params = self._init_params(X, init_method)
-        else:
-            params = params_init
-
-        # Get batch indices
-        batch_id = np.hstack([np.arange(0, n_examples, batch_size),
-                              n_examples])
-        n_batch = batch_id.size - 1
-
-        # Initialise summary stats
-        ss = self._e_step(X, params)[0]
-
-        # Do stepwise EM
-        oldL = -np.inf
-        k = 0
-        for i in range(self.max_iter):
-
-            # E-Step
-            sample_ll = self._e_step(X, params)[1]
-
-            # Evaluate likelihood
-            ll = sample_ll.mean() / self.data_dim
-            if self.verbose:
-                print("Iter {:d}   NLL: {:.4f}   Change: {:.4f}".format(i,
-                      -ll, -(ll-oldL)), flush=True)
-
-            # Break if change in likelihood is small
-            if np.abs(ll - oldL) < self.tol:
-                break
-            oldL = ll
-
-            for b in range(n_batch):
-                # Get batch
-                X_batch = X[batch_id[b]:batch_id[b+1]]
-                batch_size_current = X_batch.shape[0]
-#                print(batch_id[b])
-
-                # E-Step
-                batch_ss, sample_ll = self._e_step(X_batch, params)
-
-                # Apply stepwise update
-                step = (k + 2)**(-step_alpha)
-                for stat in ss:
-                    current_list = ss[stat]
-                    batch_list = batch_ss[stat]
-                    ss[stat] = [(1 - step)*batch_list[k]/batch_size_current*n_examples
-                                + step*current_list[k] for k in
-                                range(self.n_components)]
-
-                # M-Step
-                params = self._m_step(ss, params)
-
-                # Increment k
-                k += 1
-
-        else:
-            if self.verbose:
-                print("PPCA did not converge within the specified" +
-                      " tolerance. You might want to increase the number of" +
-                      " iterations.")
-
-
-#                # Evaluate likelihood
-#                ll = sample_ll.mean()
-#                if self.verbose:
-#                    print("Iter {:d}   NLL: {:.3f}   Change: {:.3f}".format(i,
-#                          -ll, -(ll-oldL)), flush=True)
-#
-#                # Break if change in likelihood is small
-#                if np.abs(ll - oldL) < self.tol:
-#                    break
-#                oldL = ll
-
-
-        # Update Object attributes
-        self.params = params
-        self.trainNll = ll
-        self.isFitted = True
-
     def sample(self, n_samples=1):
         """Sample from fitted model.
 
@@ -560,7 +459,7 @@ class GMM():
                   "model params.")
         else:
             # Apply one step of E-step to get the sample log-likelihoods
-            return self._e_step(X, self.params)[1]
+            return self._e_step(X, self.params)[1] / self.data_dim
 
     def score(self, X):
         """Compute the average log-likelihood of data matrix X
@@ -1074,7 +973,7 @@ class MFA(GMM):
                 imputer = Imputer()
                 X = imputer.fit_transform(X)
             kmeans.fit(X)
-            mu_list = [k for k in kmeans.cluster_centers_]
+            mu_list = [k + 0*np.random.randn(self.data_dim) for k in kmeans.cluster_centers_]
             W_list = []
             Psi_list = []
             for k in range(self.n_components):
