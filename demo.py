@@ -29,6 +29,6 @@ def main():
 #    gmm.fit(X_miss, init_method='kmeans')
 
     # Plot results
-#    plot_density(gmm, X=X, n_grid=50)
+    plot_density(gmm, X=X, n_grid=50)
 
 main()
