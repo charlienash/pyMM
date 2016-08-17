@@ -1,15 +1,16 @@
 """Gaussian mixture models (GMMs).
 
 Variants on GMMs including GMMs with full, diagonal and spherical covariance
-matrices, as well as mixture of factor analysers and mixture of probabilistic
-principal component analysis models.
+matrices, as well as mixture of factor analysers (MFA) and mixture of
+probabilistic principal component analysis models (MPPCA).
 
 The EM algorithm is used to find maximum likelihood parameter estimates in the
 presence of latent variables. The EM algorithm allows the models to handle
 data that is missing at random (MAR).
 """
 
-# Author: Charlie Nash <charlie.tc.nash@gmail.com>
+# Authors: Charlie Nash <charlie.nash@ed.ac.uk>
+# License: MIT
 
 import numpy as np
 import scipy as sp
@@ -22,7 +23,365 @@ from sklearn.decomposition import PCA, FactorAnalysis
 from sklearn.preprocessing import Imputer
 
 
-class GMM():
+class BaseModel(object):
+    """ Base class for mixture models.
+
+    This abstract class specifies an interface for all mixture classes and
+    provides basic common methods for mixture models.
+    """
+    def __init__(self, n_components, tol=1e-3, max_iter=1000, random_state=0,
+                 verbose=True, robust=False, SMALL=1e-5):
+        self.n_components = n_components
+        self.tol = tol
+        self.max_iter = max_iter
+        self.random_state = random_state
+        self.verbose = verbose
+        self.robust = robust
+        self.isFitted = False
+        self.SMALL = SMALL
+        self.error_msg = (
+            'Covariance matrix ill-conditioned. Use robust=True to ' +
+            'pre-condition covariance matrices, increase SMALL or choose ' +
+            'fewer mixture components'
+            )
+
+    def _get_log_responsibilities(self, X, mu_list, Sigma_list, components):
+        """ Get log responsibilities for given parameters"""
+        n_examples = X.shape[0]
+        log_r = np.zeros([n_examples, self.n_components])
+        for k, mu, Sigma in zip(range(self.n_components), mu_list,
+                                Sigma_list):
+            try:
+                log_r[:, k] = multivariate_normal.logpdf(X, mu, Sigma)
+            except (np.linalg.linalg.LinAlgError, ValueError):
+                if self.robust:
+                    Sigma_robust = Sigma + self.SMALL*np.eye(self.data_dim)
+                    try:
+                        log_r[:, k] = multivariate_normal.logpdf(X, mu,
+                                                                 Sigma_robust)
+                    except (np.linalg.linalg.LinAlgError, ValueError):
+                        raise np.linalg.linalg.LinAlgError(self.error_msg)
+                else:
+                    raise np.linalg.linalg.LinAlgError(self.error_msg)
+        log_r = log_r + np.log(components)
+        log_r_sum = sp.misc.logsumexp(log_r, axis=1)
+        responsibilities = np.exp(log_r - log_r_sum[:, np.newaxis])
+        return log_r_sum, responsibilities
+
+    def _get_log_responsibilities_miss(self, X, mu_list, Sigma_list,
+                                       components, observed_list):
+        """ Get log responsibilities for given parameters"""
+        n_examples = X.shape[0]
+        log_r = np.zeros([n_examples, self.n_components])
+        for n in range(n_examples):
+            id_obs = observed_list[n]
+            row = X[n, :]
+            row_obs = row[id_obs]
+            for k, mu, Sigma in zip(range(self.n_components), mu_list,
+                                    Sigma_list):
+                mu_obs = mu[id_obs]
+                Sigma_obs = Sigma[np.ix_(id_obs, id_obs)]
+                try:
+                    log_r[n, k] = (
+                        multivariate_normal.logpdf(row_obs[np.newaxis, :],
+                                                   mu_obs, Sigma_obs)
+                        )
+                except (np.linalg.linalg.LinAlgError, ValueError):
+                    if self.robust:
+                        Sigma_robust = (
+                            Sigma_obs + self.SMALL*np.eye(self.data_dim)
+                            )
+                        try:
+                            log_r[n, k] = (
+                                multivariate_normal.logpdf(row_obs, mu_obs,
+                                                           Sigma_robust)
+                                )
+                        except (np.linalg.linalg.LinAlgError, ValueError):
+                            raise np.linalg.linalg.LinAlgError(self.error_msg)
+                    else:
+                        raise np.linalg.linalg.LinAlgError(self.error_msg)
+        log_r = log_r + np.log(components)
+        log_r_sum = sp.misc.logsumexp(log_r, axis=1)
+        responsibilities = np.exp(log_r - log_r_sum[:, np.newaxis])
+        return log_r_sum, responsibilities
+
+    def _e_step(self, X, params):
+        """ E-step of the EM-algorithm.
+
+        Internal method used to call relevant e-step depending on the
+        presence of missing data.
+        """
+        if self.missing_data:
+            return self._e_step_miss(X, params)
+        else:
+            return self._e_step_no_miss(X, params)
+
+    def _e_step_no_miss(self, X, params):
+        """ E-Step of the EM-algorithm for complete data.
+
+        The E-step takes the existing parameters, for the components, bias
+        and noise variance and computes sufficient statistics for the M-Step
+        by taking the expectation of latent variables conditional on the
+        visible variables. Also returns the likelihood for the current
+        parameters.
+
+        Parameters
+        ----------
+        X : array, [nExamples, nFeatures]
+            Matrix of training data, where nExamples is the number of
+            examples and nFeatures is the number of features.
+
+        params : dict
+            Dictionary of parameters:
+
+            params['Sigma_list'] : list of covariance matrices. One for each
+                                   mixture component.
+
+            params['mu_list'] : List of mean vectors. One for each mixture
+                                component.
+
+            params['components'] : Vector of component proportions. Represents
+                                   the probability that the data comes from
+                                   each component
+
+        Returns
+        -------
+        ss : dict
+            Dictionary of sufficient statistics:
+
+                ss['r_list'] : Sum of responsibilities for each mixture
+                               component.
+
+                ss['x_list'] : Sum of data vectors weighted by component
+                               responsibilties.
+
+                ss['xx_list'] : Sum of outer products of data vectors weighted
+                                by component responsibilities.
+
+        sample_ll : array, [nExamples, ]
+            log-likelihood for each example under the current parameters.
+        """
+        raise NotImplementedError()
+
+    def _e_step_miss(self, X, params):
+        """ E-Step of the EM-algorithm for missing data.
+
+        The E-step takes the existing parameters, for the components, bias
+        and noise variance and computes sufficient statistics for the M-Step
+        by taking the expectation of latent variables conditional on the
+        visible variables. Also returns the likelihood for the current
+        parameters.
+
+        Parameters
+        ----------
+        X : array, [nExamples, nFeatures]
+            Matrix of training data, where nExamples is the number of
+            examples and nFeatures is the number of features.
+
+        params : dict
+            Dictionary of parameters:
+
+            params['Sigma_list'] : list of covariance matrices. One for each
+                                   mixture component.
+
+            params['mu_list'] : List of mean vectors. One for each mixture
+                                component.
+
+            params['components'] : Vector of component proportions. Represents
+                                   the probability that the data comes from
+                                   each component
+
+        Returns
+        -------
+        ss : dict
+            Dictionary of sufficient statistics:
+
+                ss['r_list'] : Sum of responsibilities for each mixture
+                               component.
+
+                ss['x_list'] : Sum of data vectors weighted by component
+                               responsibilties.
+
+                ss['xx_list'] : Sum of outer products of data vectors weighted
+                                by component responsibilities.
+
+        sample_ll : array, [nExamples, ]
+            log-likelihood for each example under the current parameters.
+        """
+        raise NotImplementedError()
+
+    def _m_step(self, ss, params):
+        """ M-Step of the EM-algorithm.
+
+        The M-step takes the sufficient statistics computed in the E-step, and
+        maximizes the expected complete data log-likelihood with respect to the
+        parameters.
+
+        Parameters
+        ----------
+        ss : dict
+            Dictionary of sufficient statistics:
+
+                ss['r_list'] : Sum of responsibilities for each mixture
+                               component.
+
+                ss['x_list'] : Sum of data vectors weighted by component
+                               responsibilties.
+
+                ss['xx_list'] : Sum of outer products of data vectors weighted
+                                by component responsibilities.
+
+        params : dict
+            Dictionary of parameters:
+
+            params['Sigma_list'] : list of covariance matrices. One for each
+                                   mixture component.
+
+            params['mu_list'] : List of mean vectors. One for each mixture
+                                component.
+
+            params['components'] : Vector of component proportions. Represents
+                                   the probability that the data comes from
+                                   each component
+
+        Returns
+        -------
+        params : dict
+            Updated dictionary of parameters. Keys as above.
+        """
+        raise NotImplementedError()
+
+    def _params_to_Sigma(self, params):
+        """ Converts parameter dictionary to covariance matrix list"""
+        raise NotImplementedError()
+
+    def _init_params(self, X, init_method='kmeans'):
+        """ Initialize params"""
+        raise NotImplementedError()
+
+    def fit(self, X, params_init=None, init_method='kmeans'):
+        """ Fit the model using EM with data X.
+
+        Args
+        ----
+        X : array, [nExamples, nFeatures]
+            Matrix of training data, where nExamples is the number of
+            examples and nFeatures is the number of features.
+        """
+        if np.isnan(X).any():
+            self.missing_data = True
+        else:
+            self.missing_data = False
+
+        # Check for missing values and remove if whole row is missing
+        X = X[~np.isnan(X).all(axis=1), :]
+        n_examples, data_dim = np.shape(X)
+        self.data_dim = data_dim
+        self.n_examples = n_examples
+
+        if params_init is None:
+            params = self._init_params(X, init_method)
+        else:
+            params = params_init
+
+        oldL = -np.inf
+        for i in range(self.max_iter):
+
+            # E-Step
+            ss, sample_ll = self._e_step(X, params)
+
+            # Evaluate likelihood
+            ll = sample_ll.mean() / self.data_dim
+            if self.verbose:
+                print("Iter {:d}   NLL: {:.4f}   Change: {:.4f}".format(i,
+                      -ll, -(ll-oldL)), flush=True)
+
+            # Break if change in likelihood is small
+            if np.abs(ll - oldL) < self.tol:
+                break
+            oldL = ll
+
+            # M-step
+            params = self._m_step(ss, params)
+
+        else:
+            if self.verbose:
+                print("EM algorithm did not converge within the specified" +
+                      " tolerance. You might want to increase the number of" +
+                      " iterations.")
+
+        # Update Object attributes
+        self.params = params
+        self.trainNll = ll
+        self.isFitted = True
+
+    def sample(self, n_samples=1):
+        """Sample from fitted model.
+
+        Sample from fitted model by first sampling from latent space
+        (spherical Gaussian) then transforming into data space using learned
+        parameters. Noise can then be added optionally.
+
+        Parameters
+        ----------
+        nSamples : int
+            Number of samples to generate
+        noisy : bool
+            Option to add noise to samples (default = True)
+
+        Returns
+        -------
+        dataSamples : array [nSamples, dataDim]
+            Collection of samples in data space.
+        """
+        if not self.isFitted:
+            print("Model is not yet fitted. First use fit to learn the " +
+                  "model params.")
+        else:
+            components = self.params['components']
+            mu_list = self.params['mu_list']
+            Sigma_list = self._params_to_Sigma(self.params)
+            components_cumsum = np.cumsum(components)
+            samples = np.zeros([n_samples, self.data_dim])
+            for n in range(n_samples):
+                r = np.random.rand(1)
+                z = np.argmin(r > components_cumsum)
+                samples[n] = rd.multivariate_normal(mu_list[z], Sigma_list[z])
+            return samples
+
+    def score_samples(self, X):
+        if not self.isFitted:
+            print("Model is not yet fitted. First use fit to learn the " +
+                  "model params.")
+        else:
+            # Apply one step of E-step to get the sample log-likelihoods
+            return self._e_step(X, self.params)[1] / self.data_dim
+
+    def score(self, X):
+        """Compute the average log-likelihood of data matrix X
+
+        Parameters
+        ----------
+        X: array, shape (n_samples, n_features)
+            The data
+
+        Returns
+        -------
+        meanLl: array, shape (n_samples,)
+            Log-likelihood of each sample under the current model
+        """
+        if not self.isFitted:
+            print("Model is not yet fitted. First use fit to learn the " +
+                  "model params.")
+        else:
+            # Apply one step of E-step to get the sample log-likelihoods
+            sample_ll = self.score_samples(X)
+
+            # Divide by number of examples to get average log likelihood
+            return sample_ll.mean()
+
+
+class GMM(BaseModel):
     """Gaussian Mixture Model (GMM).
 
     A mixture of Gaussians with unrestricted covariances.
@@ -88,90 +447,6 @@ class GMM():
     trainLL : float
         Mean training log-likelihood per dimension. Set after model is fitted.
     """
-    def __init__(self, n_components, tol=1e-3, max_iter=1000, random_state=0,
-                 verbose=True, robust=False, SMALL=1e-5):
-        self.n_components = n_components
-        self.tol = tol
-        self.max_iter = max_iter
-        self.random_state = random_state
-        self.verbose = verbose
-        self.robust = robust
-        self.isFitted = False
-        self.SMALL = SMALL
-        self.error_msg = (
-            'Covariance matrix ill-conditioned. Use robust=True to ' +
-            'pre-condition covariance matrices, increase SMALL or choose ' +
-            'fewer mixture components'
-            )
-
-    def _get_log_responsibilities(self, X, mu_list, Sigma_list, components):
-        n_examples = X.shape[0]
-        log_r = np.zeros([n_examples, self.n_components])
-        for k, mu, Sigma in zip(range(self.n_components), mu_list,
-                                Sigma_list):
-            try:
-                log_r[:, k] = multivariate_normal.logpdf(X, mu, Sigma)
-            except (np.linalg.linalg.LinAlgError, ValueError):
-                if self.robust:
-                    Sigma_robust = Sigma + self.SMALL*np.eye(self.data_dim)
-                    try:
-                        log_r[:, k] = multivariate_normal.logpdf(X, mu,
-                                                                 Sigma_robust)
-                    except (np.linalg.linalg.LinAlgError, ValueError):
-                        raise np.linalg.linalg.LinAlgError(self.error_msg)
-                else:
-                    raise np.linalg.linalg.LinAlgError(self.error_msg)
-        log_r = log_r + np.log(components)
-        log_r_sum = sp.misc.logsumexp(log_r, axis=1)
-        responsibilities = np.exp(log_r - log_r_sum[:, np.newaxis])
-        return log_r_sum, responsibilities
-
-    def _get_log_responsibilities_miss(self, X, mu_list, Sigma_list,
-                                       components, observed_list):
-        n_examples = X.shape[0]
-        log_r = np.zeros([n_examples, self.n_components])
-        for n in range(n_examples):
-            id_obs = observed_list[n]
-            row = X[n, :]
-            row_obs = row[id_obs]
-            for k, mu, Sigma in zip(range(self.n_components), mu_list,
-                                    Sigma_list):
-                mu_obs = mu[id_obs]
-                Sigma_obs = Sigma[np.ix_(id_obs, id_obs)]
-                try:
-                    log_r[n, k] = (
-                        multivariate_normal.logpdf(row_obs[np.newaxis, :],
-                                                   mu_obs, Sigma_obs)
-                        )
-                except (np.linalg.linalg.LinAlgError, ValueError):
-                    if self.robust:
-                        Sigma_robust = (
-                            Sigma_obs + self.SMALL*np.eye(self.data_dim)
-                            )
-                        try:
-                            log_r[n, k] = (
-                                multivariate_normal.logpdf(row_obs, mu_obs,
-                                                           Sigma_robust)
-                                )
-                        except (np.linalg.linalg.LinAlgError, ValueError):
-                            raise np.linalg.linalg.LinAlgError(self.error_msg)
-                    else:
-                        raise np.linalg.linalg.LinAlgError(self.error_msg)
-        log_r = log_r + np.log(components)
-        log_r_sum = sp.misc.logsumexp(log_r, axis=1)
-        responsibilities = np.exp(log_r - log_r_sum[:, np.newaxis])
-        return log_r_sum, responsibilities
-
-    def _e_step(self, X, params):
-        """ E-step of the EM-algorithm.
-
-        Internal method used to call relevant e-step depending on the
-        presence of missing data.
-        """
-        if self.missing_data:
-            return self._e_step_miss(X, params)
-        else:
-            return self._e_step_no_miss(X, params)
 
     def _e_step_no_miss(self, X, params):
         """ E-Step of the EM-algorithm for complete data.
@@ -470,127 +745,6 @@ class GMM():
                            'Sigma_list': Sigma_list,
                            'components': components}
             return params_init
-
-    def fit(self, X, params_init=None, init_method='kmeans'):
-        """ Fit the model using EM with data X.
-
-        Args
-        ----
-        X : array, [nExamples, nFeatures]
-            Matrix of training data, where nExamples is the number of
-            examples and nFeatures is the number of features.
-        """
-        if np.isnan(X).any():
-            self.missing_data = True
-        else:
-            self.missing_data = False
-
-        # Check for missing values and remove if whole row is missing
-        X = X[~np.isnan(X).all(axis=1), :]
-        n_examples, data_dim = np.shape(X)
-        self.data_dim = data_dim
-        self.n_examples = n_examples
-
-        if params_init is None:
-            params = self._init_params(X, init_method)
-        else:
-            params = params_init
-
-        oldL = -np.inf
-        for i in range(self.max_iter):
-
-            # E-Step
-            ss, sample_ll = self._e_step(X, params)
-
-            # Evaluate likelihood
-            ll = sample_ll.mean() / self.data_dim
-            if self.verbose:
-                print("Iter {:d}   NLL: {:.4f}   Change: {:.4f}".format(i,
-                      -ll, -(ll-oldL)), flush=True)
-
-            # Break if change in likelihood is small
-            if np.abs(ll - oldL) < self.tol:
-                break
-            oldL = ll
-
-            # M-step
-            params = self._m_step(ss, params)
-
-        else:
-            if self.verbose:
-                print("PPCA did not converge within the specified" +
-                      " tolerance. You might want to increase the number of" +
-                      " iterations.")
-
-        # Update Object attributes
-        self.params = params
-        self.trainNll = ll
-        self.isFitted = True
-
-    def sample(self, n_samples=1):
-        """Sample from fitted model.
-
-        Sample from fitted model by first sampling from latent space
-        (spherical Gaussian) then transforming into data space using learned
-        parameters. Noise can then be added optionally.
-
-        Parameters
-        ----------
-        nSamples : int
-            Number of samples to generate
-        noisy : bool
-            Option to add noise to samples (default = True)
-
-        Returns
-        -------
-        dataSamples : array [nSamples, dataDim]
-            Collection of samples in data space.
-        """
-        if not self.isFitted:
-            print("Model is not yet fitted. First use fit to learn the " +
-                  "model params.")
-        else:
-            components = self.params['components']
-            mu_list = self.params['mu_list']
-            Sigma_list = self._params_to_Sigma(self.params)
-            components_cumsum = np.cumsum(components)
-            samples = np.zeros([n_samples, self.data_dim])
-            for n in range(n_samples):
-                r = np.random.rand(1)
-                z = np.argmin(r > components_cumsum)
-                samples[n] = rd.multivariate_normal(mu_list[z], Sigma_list[z])
-            return samples
-
-    def score_samples(self, X):
-        if not self.isFitted:
-            print("Model is not yet fitted. First use fit to learn the " +
-                  "model params.")
-        else:
-            # Apply one step of E-step to get the sample log-likelihoods
-            return self._e_step(X, self.params)[1] / self.data_dim
-
-    def score(self, X):
-        """Compute the average log-likelihood of data matrix X
-
-        Parameters
-        ----------
-        X: array, shape (n_samples, n_features)
-            The data
-
-        Returns
-        -------
-        meanLl: array, shape (n_samples,)
-            Log-likelihood of each sample under the current model
-        """
-        if not self.isFitted:
-            print("Model is not yet fitted. First use fit to learn the " +
-                  "model params.")
-        else:
-            # Apply one step of E-step to get the sample log-likelihoods
-            sample_ll = self.score_samples(X)
-
-            # Divide by number of examples to get average log likelihood
-            return sample_ll.mean()
 
 
 class SphericalGMM(GMM):
