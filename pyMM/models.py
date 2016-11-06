@@ -1409,7 +1409,7 @@ class MFA(GMM):
                 row_min_mu = row_obs - mu_obs
 
                 # Get conditional distribution of p(z | x_vis, params) using
-#                # the woodbury identity
+                # the woodbury identity
 
                 Beta = (
                     Psi_inv_obs - Psi_inv_obs @ W_obs @

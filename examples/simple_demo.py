@@ -1,13 +1,13 @@
 import numpy as np
 
-from mixy.models import GMM, SphericalGMM, DiagonalGMM, MPPCA, MFA
+from pyMM import GMM, SphericalGMM, DiagonalGMM, MPPCA, MFA
 from util import _generate_mixture_data, plot_density, _gen_low_rank_data
 
 
 def main():
-    n_examples = 500
+    n_examples = 800
     data_dim = 2
-    n_components = 2
+    n_components = 8
 #    rank = 50
     X = _generate_mixture_data(data_dim, n_components, n_examples)
 #    X = _gen_low_rank_data(data_dim, rank, n_examples)
@@ -15,14 +15,14 @@ def main():
     # Obscure data
     r = np.random.rand(n_examples, data_dim)
     X_miss = X.copy()
-    X_miss[r > 0.9] = np.nan
+    X_miss[r > 0.6] = np.nan
 
     # Initialize model
 #    gmm = GMM(n_components=n_components)
 #    gmm = SphericalGMM(n_components=n_components, robust=True)
 #    gmm = DiagonalGMM(n_components=n_components)
-#    gmm = MPPCA(n_components=n_components, latent_dim=1, robust=True)
-    gmm = MFA(n_components=50, latent_dim=1, robust=True)
+    gmm = MPPCA(n_components=n_components, latent_dim=1, robust=True)
+#    gmm = MFA(n_components=3, latent_dim=1, robust=True)
 
     # Fit GMM
     gmm.fit(X, init_method='kmeans')
